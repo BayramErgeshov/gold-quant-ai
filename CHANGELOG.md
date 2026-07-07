@@ -492,3 +492,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Validation, Forward Testing, Demo Trading loop, Continuous Improvement
   scheduling) builds on `SignalWorkflow` (Phase 18) once both gateways are
   confirmed live end-to-end in that same local session.
+
+### Phase 20 — MT5 live connectivity: root-caused and fixed
+
+Live diagnosis against a real MetaQuotes demo terminal (build 5836) found
+two genuine, independent issues — not assumptions:
+
+- **The real, deterministic bug: `path=None`.** `RealMT5Client.connect()`
+  always passed `path=credentials.terminal_path or None` to
+  `MetaTrader5.initialize()`. Unlike this package's other optional
+  parameters, `initialize()` treats an *explicitly passed* `path=None` as
+  an invalid argument (`retcode -2, 'Invalid "path" argument'`) rather
+  than "unset" — it must be omitted entirely when not configured. This
+  was the actual, 100%-reproducible cause of every failed connection
+  through `RealMT5Client` specifically (ad hoc calls to
+  `MetaTrader5.initialize()` without a `path` kwarg never hit it, which is
+  why standalone diagnostic scripts had looked intermittently fine while
+  the class consistently failed). Fixed by building the `initialize()`
+  kwargs dict conditionally — every optional field (`path`, `login`,
+  `password`, `server`) is only included when actually configured.
+- **A genuine, separate ~40-60% per-attempt IPC flakiness**, measured
+  directly (10 consecutive `initialize()` calls against a healthy,
+  already-logged-in terminal: 4 succeeded, 6 hit `IPC timeout`), with no
+  correlation found to event loop policy (`ProactorEventLoop` vs
+  `WindowsSelectorEventLoopPolicy`) or calling thread
+  (`asyncio.to_thread()` vs the event loop's own thread) — both were
+  tried and measured, not just assumed, and neither changed the
+  underlying rate. `connect()`'s retry budget was raised from 3 to 8
+  attempts with backoff (0.6^8 ≈ 1.7% cumulative failure at the measured
+  rate) to absorb this reliably rather than chase an unconfirmed
+  single cause.
+- Net result: with the `path` bug fixed, live connection now succeeds
+  reliably (retries absorb the residual flakiness). Real historical
+  XAUUSD data was backfilled directly from the live terminal via
+  `MT5HistoricalIngestionService` (`scripts/mt5_historical_backfill.py`):
+  5000 M15 + 3000 H1 + 2000 H4 + 1500 D1 candles, all valid, gaps only at
+  normal weekend/holiday closures.
+- `configure_event_loop_policy()` (Selector over Proactor) and running
+  MT5 calls on the event loop's own thread (not `asyncio.to_thread()`)
+  are kept as defensive choices even though neither proved to be *the*
+  deciding factor in isolation — they don't hurt and reduce risk surface
+  for a package with an undocumented, empirically-discovered thread/IOCP
+  sensitivity.

@@ -178,3 +178,93 @@ def test_critical_news_imminent_forces_wait() -> None:
 
     assert decision.state == "WAIT"
     assert "critical_news_imminent" in decision.uncertainty_factors
+
+
+def test_missing_optional_report_does_not_force_wait() -> None:
+    reports = _all_reports_present()
+    reports["macro"] = False
+    reports["news"] = False
+
+    decision = evaluate(
+        ChiefAIInput(
+            department_votes={"technical": _vote(0.9, 0.05, 0.05, confidence=0.9)},
+            reports_present=reports,
+            risk_decision=_approved_risk(),
+            confidence_threshold=10.0,
+            market_regime="bull_trend",
+            optional_reports=frozenset({"macro", "news"}),
+        )
+    )
+
+    assert decision.state == "BUY"
+    assert decision.is_reduced_confidence is True
+    assert "reduced_confidence:macro_unavailable" in decision.reduced_confidence_factors
+    assert "reduced_confidence:news_unavailable" in decision.reduced_confidence_factors
+
+
+def test_missing_non_optional_report_still_forces_wait() -> None:
+    reports = _all_reports_present()
+    reports["macro"] = False
+    reports["ml"] = False
+
+    decision = evaluate(
+        ChiefAIInput(
+            department_votes={"technical": _vote(0.9, 0.05, 0.05, confidence=0.9)},
+            reports_present=reports,
+            risk_decision=_approved_risk(),
+            market_regime="bull_trend",
+            optional_reports=frozenset({"macro"}),
+        )
+    )
+
+    assert decision.state == "WAIT"
+    assert "required_report_missing" in decision.reasons
+    assert any(factor.startswith("missing_report:ml") for factor in decision.uncertainty_factors)
+    assert not any(
+        factor.startswith("missing_report:macro") for factor in decision.uncertainty_factors
+    )
+
+
+def test_reduced_confidence_discounts_confidence_score() -> None:
+    votes = {"technical": _vote(0.9, 0.05, 0.05, confidence=0.9)}
+    full_reports = _all_reports_present()
+    reduced_reports = _all_reports_present()
+    reduced_reports["macro"] = False
+
+    full_decision = evaluate(
+        ChiefAIInput(
+            department_votes=votes,
+            reports_present=full_reports,
+            risk_decision=_approved_risk(),
+            confidence_threshold=10.0,
+            market_regime="bull_trend",
+        )
+    )
+    reduced_decision = evaluate(
+        ChiefAIInput(
+            department_votes=votes,
+            reports_present=reduced_reports,
+            risk_decision=_approved_risk(),
+            confidence_threshold=10.0,
+            market_regime="bull_trend",
+            optional_reports=frozenset({"macro"}),
+        )
+    )
+
+    assert reduced_decision.confidence_pct < full_decision.confidence_pct
+
+
+def test_is_reduced_confidence_is_false_when_nothing_missing() -> None:
+    decision = evaluate(
+        ChiefAIInput(
+            department_votes={"technical": _vote(0.9, 0.05, 0.05, confidence=0.9)},
+            reports_present=_all_reports_present(),
+            risk_decision=_approved_risk(),
+            confidence_threshold=10.0,
+            market_regime="bull_trend",
+            optional_reports=frozenset({"macro", "news"}),
+        )
+    )
+
+    assert decision.is_reduced_confidence is False
+    assert decision.reduced_confidence_factors == []

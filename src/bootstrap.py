@@ -21,6 +21,7 @@ import sys
 
 from src.common.logging import configure_logging, get_logger
 from src.core.diagnostics import CheckResult, run_startup_diagnostics
+from src.core.execution.mt5_client import configure_event_loop_policy
 from src.settings import Settings, get_settings
 from src.telemetry.metrics import (
     PLATFORM_INFO,
@@ -105,6 +106,7 @@ def main() -> int:
     Returns:
         Process exit code: 0 if healthy, 1 if a critical dependency failed.
     """
+    configure_event_loop_policy()
     healthy = asyncio.run(bootstrap())
     return _EXIT_HEALTHY if healthy else _EXIT_CRITICAL_FAILURE
 

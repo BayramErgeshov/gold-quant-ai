@@ -10,14 +10,23 @@ from __future__ import annotations
 
 import sys
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import SecretStr
 
-from src.core.execution.mt5_client import MT5Client, OrderRequest, RealMT5Client
+from src.core.config.env_settings import MT5EnvSettings
+from src.core.execution.mt5_client import (
+    MT5Client,
+    OrderRequest,
+    RealMT5Client,
+    configure_event_loop_policy,
+)
 from src.settings import get_settings
 
 pytestmark = pytest.mark.unit
+
+_TIMEFRAME_M15 = 15
 
 _ORDER_TYPE_BUY = 0
 _ORDER_TYPE_SELL = 1
@@ -39,9 +48,21 @@ class _FakeMT5:
     TRADE_ACTION_REMOVE = 8
     TRADE_RETCODE_DONE = _TRADE_RETCODE_DONE
     ACCOUNT_TRADE_MODE_DEMO = 0
+    TIMEFRAME_M1 = 1
+    TIMEFRAME_M5 = 5
+    TIMEFRAME_M15 = _TIMEFRAME_M15
+    TIMEFRAME_M30 = 30
+    TIMEFRAME_H1 = 16385
+    TIMEFRAME_H4 = 16388
+    TIMEFRAME_D1 = 16408
+    TIMEFRAME_W1 = 32769
+    TIMEFRAME_MN1 = 49153
 
     def __init__(self) -> None:
         self.initialize_result = True
+        self.initialize_call_count = 0
+        self.initialize_results_sequence: list[bool] | None = None
+        self.last_initialize_kwargs: dict[str, object] | None = None
         self.account_info_result: object | None = SimpleNamespace(
             login=12345,
             company="Test Broker",
@@ -60,12 +81,45 @@ class _FakeMT5:
             retcode=_TRADE_RETCODE_DONE, order=555, price=2000.0, comment="done"
         )
         self.positions_get_result: tuple[object, ...] = (
-            SimpleNamespace(ticket=555, symbol="XAUUSD", volume=1.0, type=_ORDER_TYPE_BUY),
+            SimpleNamespace(
+                ticket=555,
+                symbol="XAUUSD",
+                volume=1.0,
+                type=_ORDER_TYPE_BUY,
+                price_open=2000.0,
+                sl=1990.0,
+                tp=2020.0,
+                price_current=2005.0,
+                profit=5.0,
+                magic=42,
+                time=1700000000,
+            ),
         )
         self.last_error_result = (1, "no error")
         self.last_request: dict[str, object] | None = None
+        self.last_positions_get_kwargs: dict[str, object] | None = None
+        self.last_copy_rates_args: tuple[object, ...] | None = None
+        self.copy_rates_result: object | None = [
+            {
+                "time": 1700000000,
+                "open": 2000.0,
+                "high": 2005.0,
+                "low": 1995.0,
+                "close": 2002.0,
+                "tick_volume": 100.0,
+                "spread": 13,
+                "real_volume": 0.0,
+            },
+        ]
+        self.symbol_info_tick_result: object | None = SimpleNamespace(
+            bid=2001.0, ask=2001.5, time=1700000100
+        )
 
     def initialize(self, **kwargs: object) -> bool:
+        self.initialize_call_count += 1
+        self.last_initialize_kwargs = kwargs
+        if self.initialize_results_sequence is not None:
+            return self.initialize_results_sequence.pop(0)
         return self.initialize_result
 
     def account_info(self) -> object | None:
@@ -75,8 +129,18 @@ class _FakeMT5:
         self.last_request = request
         return self.order_send_result
 
-    def positions_get(self, ticket: int) -> tuple[object, ...]:
+    def positions_get(self, **kwargs: object) -> tuple[object, ...]:
+        self.last_positions_get_kwargs = kwargs
         return self.positions_get_result
+
+    def copy_rates_from_pos(
+        self, symbol: str, timeframe: int, start_pos: int, count: int
+    ) -> object | None:
+        self.last_copy_rates_args = (symbol, timeframe, start_pos, count)
+        return self.copy_rates_result
+
+    def symbol_info_tick(self, symbol: str) -> object | None:
+        return self.symbol_info_tick_result
 
     def last_error(self) -> tuple[int, str]:
         return self.last_error_result
@@ -87,6 +151,30 @@ def fake_mt5() -> _FakeMT5:
     fake = _FakeMT5()
     with patch.dict(sys.modules, {"MetaTrader5": fake}):
         yield fake
+
+
+def test_configure_event_loop_policy_sets_selector_policy_on_windows() -> None:
+    with (
+        patch("src.core.execution.mt5_client.sys.platform", "win32"),
+        patch("src.core.execution.mt5_client.asyncio.set_event_loop_policy") as mock_set_policy,
+        patch(
+            "src.core.execution.mt5_client.asyncio.WindowsSelectorEventLoopPolicy",
+            create=True,
+        ) as mock_policy_cls,
+    ):
+        configure_event_loop_policy()
+
+    mock_set_policy.assert_called_once_with(mock_policy_cls.return_value)
+
+
+def test_configure_event_loop_policy_is_a_noop_off_windows() -> None:
+    with (
+        patch("src.core.execution.mt5_client.sys.platform", "linux"),
+        patch("src.core.execution.mt5_client.asyncio.set_event_loop_policy") as mock_set_policy,
+    ):
+        configure_event_loop_policy()
+
+    mock_set_policy.assert_not_called()
 
 
 def test_mt5_client_cannot_be_instantiated_directly() -> None:
@@ -101,15 +189,63 @@ async def test_connect_succeeds(fake_mt5: _FakeMT5) -> None:
 
     assert connected is True
     assert await client.is_connected() is True
+    assert fake_mt5.initialize_call_count == 1
+
+
+async def test_connect_omits_unconfigured_credentials(fake_mt5: _FakeMT5) -> None:
+    settings = get_settings().model_copy(update={"mt5_env": MT5EnvSettings()})
+    client = RealMT5Client(settings)
+
+    await client.connect()
+
+    assert fake_mt5.last_initialize_kwargs == {"timeout": 20000}
+
+
+async def test_connect_passes_only_configured_credentials(fake_mt5: _FakeMT5) -> None:
+    settings = get_settings().model_copy(
+        update={
+            "mt5_env": MT5EnvSettings(
+                login="109345080",
+                password=SecretStr("secret"),
+                server="MetaQuotes-Demo",
+                terminal_path=r"C:\Program Files\MetaTrader 5\terminal64.exe",
+            )
+        }
+    )
+    client = RealMT5Client(settings)
+
+    await client.connect()
+
+    assert fake_mt5.last_initialize_kwargs == {
+        "timeout": 20000,
+        "path": r"C:\Program Files\MetaTrader 5\terminal64.exe",
+        "login": 109345080,
+        "password": "secret",
+        "server": "MetaQuotes-Demo",
+    }
 
 
 async def test_connect_fails_when_initialize_returns_false(fake_mt5: _FakeMT5) -> None:
     fake_mt5.initialize_result = False
     client = RealMT5Client(get_settings())
 
-    connected = await client.connect()
+    with patch("src.core.execution.mt5_client.asyncio.sleep", AsyncMock()):
+        connected = await client.connect()
 
     assert connected is False
+    assert fake_mt5.initialize_call_count == 8
+
+
+async def test_connect_retries_and_succeeds_on_a_later_attempt(fake_mt5: _FakeMT5) -> None:
+    fake_mt5.initialize_results_sequence = [False, True]
+    client = RealMT5Client(get_settings())
+
+    with patch("src.core.execution.mt5_client.asyncio.sleep", AsyncMock()) as mock_sleep:
+        connected = await client.connect()
+
+    assert connected is True
+    assert fake_mt5.initialize_call_count == 2
+    mock_sleep.assert_awaited_once()
 
 
 async def test_get_account_info_maps_fields(fake_mt5: _FakeMT5) -> None:
@@ -264,3 +400,89 @@ async def test_cancel_order_sends_remove_action(fake_mt5: _FakeMT5) -> None:
     assert fake_mt5.last_request is not None
     assert fake_mt5.last_request["action"] == fake_mt5.TRADE_ACTION_REMOVE
     assert fake_mt5.last_request["order"] == 555
+
+
+async def test_get_candles_returns_raw_bar_dicts(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+
+    candles = await client.get_candles("XAUUSD", "M15", 100)
+
+    assert len(candles) == 1
+    assert candles[0]["open"] == 2000.0
+    assert candles[0]["close"] == 2002.0
+    assert fake_mt5.last_copy_rates_args == ("XAUUSD", _TIMEFRAME_M15, 0, 100)
+
+
+async def test_get_candles_returns_empty_list_when_no_data(fake_mt5: _FakeMT5) -> None:
+    fake_mt5.copy_rates_result = None
+    client = RealMT5Client(get_settings())
+
+    candles = await client.get_candles("XAUUSD", "M15", 100)
+
+    assert candles == []
+
+
+async def test_get_candles_raises_for_unsupported_timeframe(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+
+    with pytest.raises(ValueError, match="Unsupported timeframe"):
+        await client.get_candles("XAUUSD", "BOGUS", 100)
+
+
+async def test_get_symbol_tick_maps_fields(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+
+    tick = await client.get_symbol_tick("XAUUSD")
+
+    assert tick.bid == 2001.0
+    assert tick.ask == 2001.5
+
+
+async def test_get_symbol_tick_raises_when_none(fake_mt5: _FakeMT5) -> None:
+    fake_mt5.symbol_info_tick_result = None
+    client = RealMT5Client(get_settings())
+
+    with pytest.raises(ConnectionError):
+        await client.get_symbol_tick("XAUUSD")
+
+
+async def test_get_open_positions_maps_fields(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+
+    positions = await client.get_open_positions()
+
+    assert len(positions) == 1
+    position = positions[0]
+    assert position.ticket == "555"
+    assert position.direction == "buy"
+    assert position.entry_price == 2000.0
+    assert position.stop_loss == 1990.0
+    assert position.take_profit == 2020.0
+    assert position.magic_number == 42
+
+
+async def test_get_open_positions_filters_by_symbol(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+
+    await client.get_open_positions(symbol="XAUUSD")
+
+    assert fake_mt5.last_positions_get_kwargs == {"symbol": "XAUUSD"}
+
+
+async def test_get_open_positions_filters_by_magic_number(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+
+    matching = await client.get_open_positions(magic_number=42)
+    non_matching = await client.get_open_positions(magic_number=999)
+
+    assert len(matching) == 1
+    assert non_matching == []
+
+
+async def test_get_open_positions_returns_empty_when_none(fake_mt5: _FakeMT5) -> None:
+    fake_mt5.positions_get_result = ()
+    client = RealMT5Client(get_settings())
+
+    positions = await client.get_open_positions()
+
+    assert positions == []

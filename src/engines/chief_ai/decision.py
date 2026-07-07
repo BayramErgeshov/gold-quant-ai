@@ -32,6 +32,13 @@ REQUIRED_REPORTS: tuple[str, ...] = (
     "execution",
 )
 _CONFLICT_MARGIN = 0.1
+# Per AGENT_SYSTEM.md "never trust a single source": a decision made without
+# every independent confirming department is inherently less reliable, even
+# when it is still allowed to proceed (see `ChiefAIInput.optional_reports`).
+# This is a fixed, documented discount rather than a fabricated precise
+# number; it exists so fewer-source decisions are harder to clear the
+# confidence threshold, not a claim about the exact reliability cost.
+_REDUCED_CONFIDENCE_DISCOUNT = 0.85
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,13 +50,21 @@ class ChiefAIInput:
             "technical", "macro", "news", "historical", "ml").
         reports_present: Which `REQUIRED_REPORTS` were successfully
             produced this cycle (DECISION_ENGINE.md "Required Inputs"). A
-            missing report forces WAIT regardless of everything else.
+            missing report forces WAIT unless it is listed in
+            `optional_reports`.
         risk_decision: The Risk Engine's `TradeApprovalDecision` for this
             candidate trade.
         confidence_threshold: Minimum overall confidence (0-100) required to BUY/SELL.
         market_regime: Current classified regime, if known
             (`src.engines.historical_engine.regime_detection`).
         critical_news_imminent: Increases uncertainty and can force WAIT.
+        optional_reports: Reports that, if missing, do not force WAIT —
+            instead the decision is flagged `reduced_confidence` and its
+            confidence is discounted. Used when a department's external
+            data source is not yet configured (e.g. Macro/News before
+            FRED/NewsAPI keys are added) rather than blocking every
+            decision indefinitely; still never fabricates the missing
+            department's opinion.
     """
 
     department_votes: dict[str, CombinedVote]
@@ -58,6 +73,7 @@ class ChiefAIInput:
     confidence_threshold: float = 70.0
     market_regime: str | None = None
     critical_news_imminent: bool = False
+    optional_reports: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +83,18 @@ class ChiefAIDecision:
     Attributes:
         state: One of `DecisionState`.
         probability: The combined cross-department probability distribution.
-        confidence_pct: Overall confidence, in [0.0, 100.0].
+        confidence_pct: Overall confidence, in [0.0, 100.0] — already
+            discounted if `reduced_confidence_factors` is non-empty.
         uncertainty_factors: Every factor increasing uncertainty this cycle
-            (DECISION_ENGINE.md "Uncertainty").
+            (DECISION_ENGINE.md "Uncertainty"). Non-empty always forces WAIT.
         reasons: Why this `state` was chosen.
         supporting_evidence: Pooled supporting evidence across departments.
         opposing_evidence: Pooled opposing evidence across departments.
+        reduced_confidence_factors: Optional reports that were unavailable
+            this cycle (`ChiefAIInput.optional_reports`). Non-empty means
+            this decision was made with fewer independent sources than
+            the platform's full design calls for — flagged, but does not
+            by itself force WAIT.
     """
 
     state: DecisionState
@@ -82,6 +104,12 @@ class ChiefAIDecision:
     reasons: list[str]
     supporting_evidence: list[str] = field(default_factory=list)
     opposing_evidence: list[str] = field(default_factory=list)
+    reduced_confidence_factors: list[str] = field(default_factory=list)
+
+    @property
+    def is_reduced_confidence(self) -> bool:
+        """Whether this decision was made with an optional report missing."""
+        return bool(self.reduced_confidence_factors)
 
 
 def _missing_reports(reports_present: dict[str, bool]) -> list[str]:
@@ -126,16 +154,22 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
         DECISION_ENGINE.md "The default decision is always WAIT."
     """
     missing = _missing_reports(chief_input.reports_present)
-    if missing:
+    hard_missing = [name for name in missing if name not in chief_input.optional_reports]
+    if hard_missing:
         return ChiefAIDecision(
             state="WAIT",
             probability=ProbabilityEstimate(
                 bullish_probability=0.0, bearish_probability=0.0, neutral_probability=1.0
             ),
             confidence_pct=0.0,
-            uncertainty_factors=[f"missing_report:{name}" for name in missing],
+            uncertainty_factors=[f"missing_report:{name}" for name in hard_missing],
             reasons=["required_report_missing"],
         )
+    reduced_confidence_factors = [
+        f"reduced_confidence:{name}_unavailable"
+        for name in missing
+        if name in chief_input.optional_reports
+    ]
 
     probability = combine_department_votes(chief_input.department_votes)
     confidence_inputs = [
@@ -143,6 +177,8 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
         for name, vote in chief_input.department_votes.items()
     ]
     confidence_pct = compute_overall_confidence(confidence_inputs)
+    if reduced_confidence_factors:
+        confidence_pct *= _REDUCED_CONFIDENCE_DISCOUNT
     supporting_evidence, opposing_evidence = _pooled_evidence(chief_input.department_votes)
 
     uncertainty_factors: list[str] = []
@@ -164,6 +200,7 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
             ],
             supporting_evidence=supporting_evidence,
             opposing_evidence=opposing_evidence,
+            reduced_confidence_factors=reduced_confidence_factors,
         )
 
     if confidence_pct < chief_input.confidence_threshold:
@@ -178,6 +215,7 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
             ],
             supporting_evidence=supporting_evidence,
             opposing_evidence=opposing_evidence,
+            reduced_confidence_factors=reduced_confidence_factors,
         )
 
     if uncertainty_factors:
@@ -189,6 +227,7 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
             reasons=list(uncertainty_factors),
             supporting_evidence=supporting_evidence,
             opposing_evidence=opposing_evidence,
+            reduced_confidence_factors=reduced_confidence_factors,
         )
 
     if probability.bullish_probability > probability.bearish_probability:
@@ -209,4 +248,5 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
         reasons=reasons,
         supporting_evidence=supporting_evidence,
         opposing_evidence=opposing_evidence,
+        reduced_confidence_factors=reduced_confidence_factors,
     )

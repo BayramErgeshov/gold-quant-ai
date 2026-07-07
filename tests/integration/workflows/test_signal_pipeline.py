@@ -10,8 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.execution.mt5_client import (
     AccountInfo,
     MT5Client,
+    OpenPosition,
     OrderRequest,
     OrderResult,
+    SymbolTick,
 )
 from src.core.execution.order_validation import ExecutionValidationRequest
 from src.core.notifications.telegram_client import TelegramNotifier
@@ -59,6 +61,17 @@ class _FakeMT5Client(MT5Client):
         raise NotImplementedError
 
     async def cancel_order(self, broker_ticket: str) -> OrderResult:
+        raise NotImplementedError
+
+    async def get_candles(self, symbol: str, timeframe: str, count: int) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    async def get_symbol_tick(self, symbol: str) -> SymbolTick:
+        raise NotImplementedError
+
+    async def get_open_positions(
+        self, *, symbol: str | None = None, magic_number: int | None = None
+    ) -> list[OpenPosition]:
         raise NotImplementedError
 
 
