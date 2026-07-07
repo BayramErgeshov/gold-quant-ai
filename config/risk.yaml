@@ -1,0 +1,68 @@
+# Risk Engine configuration — RISK_ENGINE.md, DECISION_ENGINE.md, CONFIGURATION.md
+#
+# All thresholds are configurable and versioned. Changes to this file affect
+# production trade approval and must follow MODEL_GOVERNANCE.md change control:
+# any change is logged, reasoned and reversible.
+
+confidence:
+  reject_below: 40           # 0-40 -> Reject (RISK_ENGINE.md confidence levels)
+  observation_only_below: 61 # 41-60 -> Observation only, no execution
+  setup_requires_confirmation_below: 76  # 61-75 -> Requires stronger confirmation
+  high_quality_below: 86      # 76-85 -> High quality, execution allowed
+  institutional_grade: 86     # 86-100 -> Institutional grade
+
+quality:
+  minimum_grade: BBB          # Trades below this grade are rejected
+  maximum_risk_grade: BB
+  minimum_historical_similarity: 0.55
+  minimum_data_quality_grade: BBB
+
+exposure:
+  max_total_exposure_pct: 5.0
+  max_gold_exposure_pct: 5.0
+  max_correlated_exposure_pct: 7.5
+  max_daily_exposure_pct: 10.0
+  max_weekly_exposure_pct: 20.0
+  max_simultaneous_positions: 3
+
+position_sizing:
+  mode: dynamic                # never fixed, per RISK_ENGINE.md
+  risk_per_trade_pct: 0.5
+  max_risk_per_trade_pct: 1.0
+  atr_multiplier_for_stop: 1.5
+
+drawdown:
+  max_daily_drawdown_pct: 2.0
+  max_weekly_drawdown_pct: 5.0
+  max_monthly_drawdown_pct: 10.0
+  action_on_breach: disable_new_entries
+
+filters:
+  trend_alignment_enabled: true
+  liquidity_enabled: true
+  macro_enabled: true
+  news_enabled: true
+  historical_similarity_enabled: true
+  machine_learning_enabled: true
+  book_validation_enabled: true
+  correlation_filter_enabled: true
+  volatility_filter_enabled: true
+  session_filter_enabled: true
+
+news_protection:
+  minutes_before_high_impact_no_new_entries: 30
+  minutes_after_high_impact_no_new_entries: 15
+
+correlation_watchlist:
+  - XAGUSD
+  - DXY
+  - US10Y
+  - VIX
+  - SPX500
+  - USOIL
+  - COPPER
+
+trade_management:
+  break_even_requires_structure_confirmation: true
+  trailing_methods_allowed: [structure, atr, swing, liquidity, vwap, order_blocks, adaptive_hybrid]
+  partial_close_options_pct: [0, 25, 33, 50, 75]

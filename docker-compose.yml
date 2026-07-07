@@ -1,0 +1,141 @@
+# GOLD QUANT AI — local / demo infrastructure.
+# Startup order follows DEPLOYMENT.md: PostgreSQL -> Redis -> Qdrant -> app -> monitoring.
+# Engine containers (chief_ai, technical, macro, ...) are added as those phases
+# of IMPLEMENTATION_ROADMAP.md are implemented; Phase 1 wires the app skeleton
+# and shared infrastructure only.
+
+name: gold-quant-ai
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gqa_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gold_quant_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-gold_quant_ai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gold_quant_ai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 2g
+
+  redis:
+    image: redis:7-alpine
+    container_name: gqa_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: gqa_qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 2g
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: gqa_postgres_exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-gold_quant_ai}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-gold_quant_ai}?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: gqa_redis_exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: gqa_prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - postgres-exporter
+      - redis-exporter
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: gqa_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gqa_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      QDRANT_HOST: qdrant
+    ports:
+      - "8000:8000"
+      - "9100:9090"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    mem_limit: 4g
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  prometheus_data:
+  grafana_data:

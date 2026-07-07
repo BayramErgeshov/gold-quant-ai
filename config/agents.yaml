@@ -1,0 +1,41 @@
+# Agent System configuration — AGENT_SYSTEM.md, AGENT_COMMUNICATION_PROTOCOL.md
+
+heartbeat_interval_seconds: 30
+message_delivery_target_ms: 20
+validation_target_ms: 5
+queue_processing_target_ms: 50
+chief_ai_aggregation_target_ms: 200
+
+retry_policy:
+  retry_on: [temporary_error, network_failure, timeout]
+  never_retry_on: [invalid_request, corrupted_message, authentication_error, validation_error]
+  max_retries: 3
+  backoff_seconds_initial: 1
+  backoff_seconds_max: 30
+
+queues:
+  - market_queue
+  - research_queue
+  - execution_queue
+  - learning_queue
+  - news_queue
+  - macro_queue
+  - historical_queue
+  - telegram_queue
+  - system_queue
+  - emergency_queue
+
+departments:
+  technical:
+    agents: [market_structure, multi_timeframe, liquidity, smart_money, ict, wyckoff,
+              elliott, price_action, pattern_recognition, trend, volatility,
+              volume_profile, order_flow, vwap, fibonacci]
+  macro:
+    agents: [news, economic_calendar, dxy, bond_yield, etf, cot, commodity_correlation]
+  book:
+    agents: [book_reader, academic, knowledge_validation]
+  historical:
+    agents: [historical_similarity, regime_detection]
+  machine_learning:
+    agents: [prediction, classification, clustering, anomaly_detection,
+              feature_engineering, model_validation, drift_detection, performance_evaluation]

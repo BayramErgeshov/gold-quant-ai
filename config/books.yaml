@@ -1,0 +1,41 @@
+# Book Engine configuration — BOOK_RAG.md, CONFIGURATION.md
+
+automatic_ocr: true
+automatic_chunking: true
+automatic_embeddings: true
+knowledge_graph_enabled: true
+validation_required: true
+
+chunking:
+  target_tokens_per_chunk: 400
+  overlap_tokens: 50
+
+# Embedding provider is fully configurable: switch `provider` to "openai" (or
+# add a new provider implementing EmbeddingProvider) without touching code.
+# Vector dimension is never hardcoded here — it is read from the active
+# provider at runtime and used to create/validate the Qdrant collection,
+# since different models produce different-sized vectors.
+embedding:
+  provider: local
+  local:
+    # Tried in order; the first model that downloads/loads successfully is
+    # used. bge-m3 and bge-large-en-v1.5 both produce 1024-dim vectors;
+    # all-MiniLM-L6-v2 (384-dim) is a lightweight last-resort fallback for
+    # constrained environments.
+    model_candidates:
+      - "BAAI/bge-m3"
+      - "BAAI/bge-large-en-v1.5"
+      - "sentence-transformers/all-MiniLM-L6-v2"
+    device: cpu
+  openai:
+    model: text-embedding-3-large
+    dimension: 3072
+
+knowledge_priority:
+  1: peer_reviewed_research
+  2: institutional_research
+  3: official_documentation
+  4: professional_trading_books
+  5: user_knowledge
+  6: internet_articles
+  7: community_discussions

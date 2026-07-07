@@ -1,0 +1,12 @@
+# GOLD QUANT AI — Grafana datasource provisioning.
+# See OBSERVABILITY_AND_MONITORING.md (Dashboards, Grafana Panels).
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

@@ -1,0 +1,15 @@
+# Research Framework configuration — RESEARCH_FRAMEWORK.md
+
+continuous_research_enabled: true
+
+priority_1: [risk_reduction, prediction_improvement, historical_accuracy, execution_quality]
+priority_2: [new_features, new_strategies, new_data_sources, optimization]
+priority_3: [experimental_research, long_term_projects, academic_topics, future_improvements]
+
+hypothesis_validation_required: [historical_validation, out_of_sample, walk_forward, monte_carlo,
+                                   statistical_significance, robustness, repeatability]
+
+schedule:
+  daily_utc_hour: 1
+  weekly_day: sunday
+  monthly_day: 1

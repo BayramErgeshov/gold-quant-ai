@@ -1,0 +1,32 @@
+# Telegram configuration — TELEGRAM.md, CONFIGURATION.md
+# Secrets (bot token, chat ids) come from environment variables (.env), never here.
+
+features:
+  signals_enabled: true
+  research_reports_enabled: true
+  learning_reports_enabled: true
+  trade_journal_enabled: true
+  daily_reports_enabled: true
+  weekly_reports_enabled: true
+  monthly_reports_enabled: true
+  emergency_alerts_enabled: true
+
+report_schedule:
+  daily_utc_hour: 0
+  weekly_day: sunday
+  weekly_utc_hour: 0
+  monthly_day: 1
+  monthly_utc_hour: 0
+
+notification_priority_levels: [critical, high, medium, low, silent]
+
+rate_limits:
+  max_messages_per_minute: 20
+  merge_similar_notifications: true
+
+message_rules:
+  max_signal_message_chars: 1200
+  include_timestamp: true
+  include_confidence: true
+  include_reason: true
+  include_journal_reference: true

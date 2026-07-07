@@ -1,0 +1,39 @@
+# Monitoring configuration — OBSERVABILITY_AND_MONITORING.md, CONFIGURATION.md
+
+prometheus:
+  enabled: true
+  port: 9090
+  scrape_interval_seconds: 15
+
+healthchecks:
+  enabled: true
+  interval_seconds: 30
+  timeout_seconds: 5
+
+alert_levels: [INFO, WARNING, ERROR, CRITICAL, EMERGENCY]
+
+critical_alert_triggers:
+  - database_offline
+  - mt5_offline
+  - telegram_offline
+  - chief_ai_offline
+  - risk_engine_offline
+  - execution_engine_offline
+  - historical_database_corrupted
+  - model_drift_critical
+  - unexpected_live_trading
+  - data_corruption
+
+performance_targets_ms:
+  market_tick_processing: 50
+  technical_analysis: 500
+  macro_analysis: 500
+  news_analysis: 1000
+  chief_ai_decision: 2000
+  mt5_order_submission: 250
+  telegram_notification: 1000
+  database_query: 50
+  embedding_search: 100
+  similarity_search: 500
+
+heartbeat_interval_seconds: 30

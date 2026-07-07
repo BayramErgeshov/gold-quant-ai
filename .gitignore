@@ -1,0 +1,68 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Poetry
+poetry.lock.bak
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Data / runtime artifacts (structure tracked via .gitkeep, contents are not)
+#
+# NOTE: use `dir/*/*` (exactly one level deep), never `dir/**/*`, to exclude
+# subdirectory *contents* without excluding the subdirectory itself — `**/*`
+# also matches the intermediate directory, which then blocks the `!.gitkeep`
+# negation below it from ever being evaluated.
+data/*
+!data/.gitkeep
+logs/*/*
+!logs/*/.gitkeep
+backups/*
+!backups/.gitkeep
+models/*/*
+!models/*/.gitkeep
+embeddings/*
+!embeddings/.gitkeep
+vector_db/*
+!vector_db/.gitkeep
+datasets/*/*
+!datasets/*/.gitkeep
+books/uploaded/*
+books/processed/*
+!books/*/.gitkeep
+reports/*/*
+!reports/*/.gitkeep
+
+# Secrets
+*.pem
+*.key
+secrets/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml

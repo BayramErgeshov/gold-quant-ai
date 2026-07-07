@@ -1,0 +1,40 @@
+# Logging configuration — CODING_STANDARDS.md, OBSERVABILITY_AND_MONITORING.md
+# Structured JSON logging. No print(). No secrets in logs (SECURITY_ARCHITECTURE.md).
+
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  json:
+    format: "%(message)s"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: json
+    stream: ext://sys.stdout
+  application_file:
+    class: logging.handlers.TimedRotatingFileHandler
+    formatter: json
+    filename: logs/application/app.log
+    when: midnight
+    backupCount: 30
+    encoding: utf-8
+  error_file:
+    class: logging.handlers.TimedRotatingFileHandler
+    formatter: json
+    filename: logs/errors/error.log
+    when: midnight
+    backupCount: 90
+    encoding: utf-8
+    level: ERROR
+
+root:
+  level: INFO
+  handlers: [console, application_file, error_file]
+
+loggers:
+  src:
+    level: INFO
+    handlers: [console, application_file, error_file]
+    propagate: false

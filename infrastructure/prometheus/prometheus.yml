@@ -1,0 +1,23 @@
+# GOLD QUANT AI — Prometheus scrape configuration.
+# See OBSERVABILITY_AND_MONITORING.md (Prometheus Exporters) and config/monitoring.yaml.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: gold_quant_ai_app
+    static_configs:
+      - targets: ["app:9090"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

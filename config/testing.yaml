@@ -1,0 +1,69 @@
+# Environment profile: testing
+# Used by the automated test suite (pytest). Isolated database/cache, no external calls.
+
+environment: testing
+
+symbols:
+  primary: XAUUSD
+  enabled:
+    - XAUUSD
+
+timeframes:
+  enabled: [MN, W1, D1, H4, H1, M30, M15, M5, M1]
+  default_execution: M5
+  default_context: D1
+  primary_structure: H4
+
+analysis_frequency:
+  tick: realtime
+  m1_seconds: 60
+  m5_seconds: 300
+  m15_seconds: 900
+  h1_seconds: 3600
+  daily_utc_hour: 0
+  weekly_day: sunday
+  monthly_day: 1
+
+departments_enabled:
+  chief_ai: true
+  technical: true
+  macro: true
+  news: true
+  risk: true
+  execution: true
+  historical: true
+  book: true
+  machine_learning: true
+  learning: true
+  statistics: true
+  workflow: true
+  monitoring: true
+  database: true
+  telegram: false
+  mt5: false
+
+data_sources_enabled:
+  market_data: false
+  news: false
+  macro: false
+  books: false
+  historical: false
+  machine_learning: false
+  research: false
+
+execution:
+  execution_enabled: false
+  demo_only: true
+  live_enabled: false
+  pending_orders_enabled: true
+  market_orders_enabled: true
+  partial_close_enabled: true
+  trailing_enabled: true
+  break_even_enabled: true
+
+logging:
+  level: WARNING
+
+database:
+  auto_backup: false
+  echo_sql: false

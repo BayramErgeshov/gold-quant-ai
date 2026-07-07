@@ -1,0 +1,151 @@
+[tool.poetry]
+name = "gold-quant-ai"
+version = "1.0.0"
+description = "Institutional multi-agent AI research and trading platform for XAUUSD"
+authors = ["GOLD QUANT AI Team"]
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+
+# Core
+pydantic = "^2.9.2"
+pydantic-settings = "^2.6.1"
+PyYAML = "^6.0.2"
+
+# Async runtime / scheduling
+anyio = "^4.6.2"
+apscheduler = "^3.10.4"
+
+# Database
+sqlalchemy = { extras = ["asyncio"], version = "^2.0.36" }
+asyncpg = "^0.30.0"
+alembic = "^1.14.0"
+redis = "^5.2.0"
+qdrant-client = "^1.12.1"
+
+# Logging / observability
+structlog = "^24.4.0"
+prometheus-client = "^0.21.0"
+
+# HTTP / networking
+httpx = "^0.27.2"
+tenacity = "^9.0.0"
+
+# Telegram
+python-telegram-bot = "^21.7"
+
+# MT5 (Windows only)
+MetaTrader5 = { version = "^5.0.45", markers = "sys_platform == 'win32'" }
+
+# Data / ML (Phase 3+ engines depend on these; declared now per dependency policy)
+numpy = "^2.1.3"
+pandas = "^2.2.3"
+
+# Machine Learning Engine (Phase 9): explainable classical models
+# (linear/tree/ensemble) per MACHINE_LEARNING_ENGINE.md "No black-box decisions"
+scikit-learn = "^1.5.2"
+
+# Monitoring (Phase 17): host/process resource metrics
+psutil = "^6.1.1"
+
+# Book Engine (Phase 4): local embeddings, document parsing, OCR, language detection
+sentence-transformers = "^3.3.1"
+pypdf = "^5.1.0"
+langdetect = "^1.0.9"
+pytesseract = "^0.3.13"
+pdf2image = "^1.17.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+pytest-asyncio = "^0.24.0"
+pytest-cov = "^6.0.0"
+ruff = "^0.7.4"
+mypy = "^1.13.0"
+bandit = "^1.8.0"
+types-PyYAML = "^6.0.12.20240917"
+types-psutil = "^6.1.0"
+pre-commit = "^4.0.1"
+aiosqlite = "^0.20.0"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "N"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+module = "MetaTrader5.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sentence_transformers.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "langdetect.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pytesseract.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pdf2image.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sklearn.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q --strict-markers --cov=src --cov-report=term-missing"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests requiring live infrastructure (db, redis, qdrant)",
+    "slow: long-running tests (backtests, historical replay)",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "src/**/__init__.py",
+    # Alembic-only code: exercised by `alembic upgrade head` against a real
+    # database (see CI), not meaningfully unit-testable in isolation.
+    "src/database/migrations/env.py",
+    "src/database/migrations/versions/*.py",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

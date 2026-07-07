@@ -1,0 +1,22 @@
+# Macro Engine configuration — AGENT_SYSTEM.md (Macro Department), ARCHITECTURE.md
+
+central_banks: [fed, ecb, boj, pboc]
+
+indicators:
+  - interest_rates
+  - inflation_cpi
+  - inflation_ppi
+  - inflation_pce
+  - employment_nfp
+  - gdp
+  - pmi
+  - retail_sales
+
+correlation_instruments: [xagusd, dxy, us10y, us2y, uso, copper, vix, spx500, nasdaq, btcusd]
+
+update_intervals:
+  interest_rates: immediate
+  inflation: immediate
+  gdp: immediate
+  cot: weekly
+  etf_holdings: daily

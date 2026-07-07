@@ -1,0 +1,19 @@
+# News Engine configuration — NEWS_ENGINE.md
+
+sources:
+  tier_1: [reuters, bloomberg, federal_reserve, fomc, ecb, boe, boj, pboc, snb, rba, rbnz, boc,
+           bls, bea, fred, us_treasury, cme, cftc, sec, world_gold_council, imf, world_bank, bis]
+  tier_2: [tradingeconomics, forexfactory, investing_com, marketwatch, cnbc,
+           financial_times, wsj, kitco, yahoo_finance, nasdaq, seeking_alpha]
+  tier_3: [tradingview_ideas, professional_blogs, research_publications,
+           institutional_reports, academic_journals, peer_reviewed_papers]
+
+collection_mode: continuous
+
+deduplication:
+  similarity_threshold: 0.85
+
+black_swan_detection:
+  volatility_spike_std_dev: 4.0
+
+historical_reaction_lookback_years: 20

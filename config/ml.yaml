@@ -1,0 +1,21 @@
+# Machine Learning Engine configuration — MACHINE_LEARNING_ENGINE.md, MODEL_GOVERNANCE.md
+
+enabled: true
+explainable_models_only: true
+automatic_retraining: false
+user_approval_required_for_deployment: true
+model_versioning_enabled: true
+drift_detection_enabled: true
+
+training:
+  min_training_years: 5
+  validation_split_pct: 20
+  out_of_sample_split_pct: 15
+  walk_forward_folds: 6
+
+drift_thresholds:
+  feature_drift_psi: 0.2
+  performance_drift_pct: 10.0
+
+calibration:
+  min_brier_score_acceptable: 0.22

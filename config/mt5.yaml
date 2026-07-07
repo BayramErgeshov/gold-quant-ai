@@ -1,0 +1,30 @@
+# MT5 Engine configuration — MT5_ENGINE.md, CONFIGURATION.md
+# Credentials come from environment variables (.env), never here.
+
+account:
+  mode: demo                  # demo | live — live requires explicit separate approval
+  multi_account_support: true
+
+symbols:
+  primary: XAUUSD
+
+execution_validation:
+  max_spread_points: 350
+  max_slippage_points: 50
+  min_free_margin_pct: 20
+  require_trading_allowed: true
+  require_market_open: true
+
+reconnect:
+  max_attempts: 10
+  backoff_seconds_initial: 2
+  backoff_seconds_max: 60
+
+order_defaults:
+  magic_number_base: 900100
+  comment_prefix: "GOLDQUANTAI"
+
+history_download:
+  download_max_available_history: true
+  timeframes: [MN, W1, D1, H4, H1, M30, M15, M5, M1]
+  include_ticks: true

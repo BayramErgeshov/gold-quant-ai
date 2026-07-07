@@ -1,0 +1,43 @@
+# Database configuration — DATABASE.md, CONFIGURATION.md
+# Connection strings/credentials come from environment variables (.env).
+
+postgres:
+  pool_min_size: 5
+  pool_max_size: 20
+  statement_timeout_ms: 30000
+  echo_sql: false
+
+redis:
+  max_connections: 50
+  socket_timeout_seconds: 5
+  decode_responses: true
+
+# Collections whose vectors come from `src.core.embeddings` (currently just
+# "books") are NOT listed here: their dimension depends on whichever
+# embedding provider/model is active (see config/books.yaml), so they are
+# created/validated dynamically via
+# `src.database.qdrant.collections.ensure_collection_for_dimension` rather
+# than a static size below. Static entries here are placeholders for
+# collections owned by engines not yet implemented; each will move to the
+# same dynamic pattern once its owning engine picks an embedding source.
+qdrant:
+  collections:
+    news: { vector_size: 1536, distance: Cosine }
+    research: { vector_size: 1536, distance: Cosine }
+    historical: { vector_size: 1536, distance: Cosine }
+    journal: { vector_size: 1536, distance: Cosine }
+    market: { vector_size: 1536, distance: Cosine }
+    strategies: { vector_size: 1536, distance: Cosine }
+
+backup:
+  auto_backup_enabled: true
+  hourly_enabled: true
+  daily_enabled: true
+  weekly_enabled: true
+  monthly_enabled: true
+  compression_enabled: true
+  integrity_check_enabled: true
+  retention_days: 365
+
+data_retention:
+  never_delete: [trades, research, books, historical_data, learning_reports]
