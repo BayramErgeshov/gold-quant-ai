@@ -6,9 +6,13 @@ trading. If a critical dependency is unhealthy, the platform must not trade
 but should continue running remaining diagnostics and stay observable
 (FAILSAFE_PROTOCOL.md Level 2/3 behavior) rather than crash outright.
 
-New checks (MT5, Telegram, external data providers, ...) are added here as
-the engines that own them are implemented in later roadmap phases — this
-module intentionally only checks infrastructure that already exists.
+`check_mt5`/`check_telegram` must be run from the same local Windows
+session as a running MT5 terminal / with a real bot token configured —
+`MetaTrader5.initialize()` communicates via local IPC, so it cannot
+succeed from a different machine or an isolated remote session than the
+one running the terminal. External data providers (FRED/NewsAPI/
+TwelveData) are checked per-request by their own `FallbackChain`
+(DATA_COLLECTION_ENGINE.md), not here at startup.
 """
 
 from __future__ import annotations
@@ -22,6 +26,8 @@ import asyncpg
 import redis.asyncio as redis
 from qdrant_client import AsyncQdrantClient
 
+from src.core.execution.mt5_client import RealMT5Client
+from src.core.notifications.telegram_client import RealTelegramNotifier
 from src.settings import Settings
 
 
@@ -122,6 +128,46 @@ async def check_qdrant(settings: Settings) -> CheckResult:
     return await _timed("qdrant", critical=True, probe=probe)
 
 
+async def check_mt5(settings: Settings) -> CheckResult:
+    """Verify the MT5 terminal is running, reachable and authenticated.
+
+    Per MT5_ENGINE.md "Connection Validation": before any operation,
+    confirm the terminal is running and the account is authenticated.
+    Reports a clear "not configured" detail rather than a confusing IPC
+    error when `MT5_LOGIN` has not been set yet.
+    """
+
+    async def probe() -> str:
+        if not settings.mt5_env.login:
+            raise RuntimeError("MT5_LOGIN not configured")
+        client = RealMT5Client(settings)
+        if not await client.connect():
+            raise ConnectionError(
+                "MetaTrader5.initialize() failed - is the terminal running on this machine?"
+            )
+        account = await client.get_account_info()
+        mode = "demo" if account.is_demo else "LIVE"
+        return f"account {account.login} on {account.server} ({mode})"
+
+    return await _timed("mt5", critical=True, probe=probe)
+
+
+async def check_telegram(settings: Settings) -> CheckResult:
+    """Verify the configured Telegram bot token is valid.
+
+    Reports a clear "not configured" detail rather than a confusing API
+    error when `TELEGRAM_BOT_TOKEN` has not been set yet.
+    """
+
+    async def probe() -> str:
+        if not settings.telegram_env.bot_token.get_secret_value():
+            raise RuntimeError("TELEGRAM_BOT_TOKEN not configured")
+        username = await RealTelegramNotifier(settings).verify_connection()
+        return f"bot {username}"
+
+    return await _timed("telegram", critical=True, probe=probe)
+
+
 async def run_startup_diagnostics(settings: Settings) -> list[CheckResult]:
     """Run every registered startup check concurrently.
 
@@ -135,5 +181,7 @@ async def run_startup_diagnostics(settings: Settings) -> list[CheckResult]:
         check_postgres(settings),
         check_redis(settings),
         check_qdrant(settings),
+        check_mt5(settings),
+        check_telegram(settings),
     )
     return list(await asyncio.gather(*checks))

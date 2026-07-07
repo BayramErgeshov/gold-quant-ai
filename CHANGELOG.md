@@ -462,3 +462,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   GPU inference, execution-path latency budgets) requires production
   query volume and real embedding/inference workloads to profile against
   and is deferred until a live deployment provides that data.
+
+### Phase 20 — Demo Deployment (in progress)
+
+- Startup diagnostics extended with `check_mt5`/`check_telegram`
+  (`src/core/diagnostics.py`), closing the gap the module's own docstring
+  had flagged since Phase 1. Both report a clear "not configured" detail
+  instead of a confusing low-level error when credentials are unset, and
+  are now part of `run_startup_diagnostics`'s concurrent check set.
+- `RealTelegramNotifier.verify_connection()` added (`getMe`-based token
+  validation), reused by `check_telegram`.
+- **Telegram: verified live.** Bot token confirmed via `getMe`
+  (`@xauusd_bybob_bot`) and a real `sendMessage` was delivered to the
+  configured group ("trade", chat id `-5127336869`). Values are ready to
+  add to `.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_IDS` or a
+  dedicated trading-group setting) — this assistant's `.env` write access
+  is permission-blocked, so the user adds them.
+- **MT5: cannot be verified from this session.** `MetaTrader5.initialize()`
+  communicates with the terminal via local IPC (named pipes/shared
+  memory), which only works within the same Windows logon session as the
+  running terminal. This assistant's execution environment is an isolated
+  session even though nominally Windows, so `initialize()` reliably
+  returns `IPC timeout` here regardless of whether the terminal is open
+  on the user's own desktop. `MT5_LOGIN=109345080`,
+  `MT5_SERVER=MetaQuotes_Demo` were confirmed well-formed for a MetaQuotes
+  demo account; genuine connectivity can only be confirmed by running
+  `check_mt5`/the platform directly on the machine where the terminal runs.
+- Remaining Phase 20 work (Historical Learning bootstrap, Paper
+  Validation, Forward Testing, Demo Trading loop, Continuous Improvement
+  scheduling) builds on `SignalWorkflow` (Phase 18) once both gateways are
+  confirmed live end-to-end in that same local session.

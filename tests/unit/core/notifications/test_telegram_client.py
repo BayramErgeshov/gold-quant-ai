@@ -29,6 +29,9 @@ class _FakeBot:
         self.last_call = kwargs
         return self.sent_message
 
+    async def get_me(self) -> object:
+        return SimpleNamespace(username="xauusd_bybob_bot")
+
 
 class _FakeTelegramModule:
     def __init__(self, bot: _FakeBot) -> None:
@@ -63,3 +66,12 @@ async def test_send_message_returns_false_when_bot_returns_none() -> None:
         result = await notifier.send_message("12345", "hello")
 
     assert result is False
+
+
+async def test_verify_connection_returns_bot_username() -> None:
+    fake_bot = _FakeBot()
+    with patch.dict(sys.modules, {"telegram": _FakeTelegramModule(fake_bot)}):
+        notifier = RealTelegramNotifier(get_settings())
+        result = await notifier.verify_connection()
+
+    assert result == "@xauusd_bybob_bot"

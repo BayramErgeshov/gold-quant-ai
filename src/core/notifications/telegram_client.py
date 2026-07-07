@@ -9,10 +9,10 @@ only sends it.
 activates automatically once `TELEGRAM_BOT_TOKEN` is set in `.env`
 (`src.core.config.env_settings.TelegramEnvSettings`), mirroring the Data
 Collection Engine's provider-activation pattern (DATA_COLLECTION_ENGINE.md).
-No Telegram bot token was available while building this, so it is
-exercised in tests against a fake `telegram.Bot`, not a live bot. The
-`telegram` package is imported lazily so this module remains importable
-and testable without it installed.
+Verified against a live bot token and chat during Phase 20 (`getMe` and a
+real `sendMessage` both succeeded); unit tests still exercise it against a
+fake `telegram.Bot` for determinism. The `telegram` package is imported
+lazily so this module remains importable and testable without it installed.
 """
 
 from __future__ import annotations
@@ -64,3 +64,16 @@ class RealTelegramNotifier(TelegramNotifier):
         bot = telegram.Bot(token=self._settings.telegram_env.bot_token.get_secret_value())
         message = await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
         return message is not None
+
+    async def verify_connection(self) -> str:
+        """Verify the bot token is valid via `getMe` (MT5_ENGINE.md-style
+        "Connection Validation", applied to Telegram).
+
+        Returns:
+            The bot's `@username`, confirming the token is valid.
+        """
+        import telegram
+
+        bot = telegram.Bot(token=self._settings.telegram_env.bot_token.get_secret_value())
+        me = await bot.get_me()
+        return f"@{me.username}"
