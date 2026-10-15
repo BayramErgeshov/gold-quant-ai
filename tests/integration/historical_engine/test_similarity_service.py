@@ -102,11 +102,49 @@ async def test_search_skips_matches_without_enough_forward_data(session: AsyncSe
 
     # top_n covers almost every candidate window, including ones near the
     # tail of history that don't have `forward_bars` of data after them.
-    result = await service.search(
-        symbol.id, "H1", window_size=20, forward_bars=100, top_n=200
-    )
+    result = await service.search(symbol.id, "H1", window_size=20, forward_bars=100, top_n=200)
 
     assert len(result.matches) > result.outcome_statistics.sample_size
+
+
+async def test_search_enriches_matches_with_outcome_and_adverse_excursion(
+    session: AsyncSession,
+) -> None:
+    symbol = await SymbolRepository(session).add(Symbol(name="XAUUSD", display_name="Gold"))
+    await _seed_candles(session, symbol.id, _sine_wave_candles(200, period=20))
+    service = HistoricalSimilarityService(
+        candle_repository=CandleRepository(session),
+        similarity_repository=HistoricalSimilarityRepository(session),
+    )
+
+    result = await service.search(symbol.id, "H1", window_size=20, forward_bars=5, top_n=10)
+
+    measured = [m for m in result.matches if m.outcome_return_pct is not None]
+    assert measured
+    for match in measured:
+        assert match.adverse_if_long_pct is not None
+        assert match.adverse_if_long_pct >= 0.0
+        assert match.adverse_if_short_pct is not None
+        assert match.adverse_if_short_pct >= 0.0
+
+
+async def test_search_leaves_outcome_none_for_matches_without_enough_forward_data(
+    session: AsyncSession,
+) -> None:
+    symbol = await SymbolRepository(session).add(Symbol(name="XAUUSD", display_name="Gold"))
+    await _seed_candles(session, symbol.id, _sine_wave_candles(200, period=20))
+    service = HistoricalSimilarityService(
+        candle_repository=CandleRepository(session),
+        similarity_repository=HistoricalSimilarityRepository(session),
+    )
+
+    result = await service.search(symbol.id, "H1", window_size=20, forward_bars=100, top_n=200)
+
+    unmeasured = [m for m in result.matches if m.outcome_return_pct is None]
+    assert unmeasured
+    for match in unmeasured:
+        assert match.adverse_if_long_pct is None
+        assert match.adverse_if_short_pct is None
 
 
 async def test_search_skips_matches_with_zero_entry_price(session: AsyncSession) -> None:

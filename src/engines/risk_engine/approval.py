@@ -29,6 +29,19 @@ _CONFIDENCE_LEVEL_THRESHOLDS: tuple[tuple[float, ConfidenceLevel], ...] = (
 _EXECUTABLE_CONFIDENCE_LEVELS: frozenset[ConfidenceLevel] = frozenset(
     {"high_quality", "institutional_grade"}
 )
+# Per the "Demo Learning Mode" production requirement ("allow parallel
+# trades, aggressive experimentation... maximize statistically useful
+# trading experience"): while that mode is enabled, "possible_setup"
+# (61-75%) also counts as executable. This tier floor is independent of
+# -- and normally stricter than -- any per-strategy `confidence_threshold`
+# a user configures in Settings (RuntimeSettings.confidence_threshold/
+# scalping_confidence_threshold/swing_confidence_threshold can be set as
+# low as they like, but a decision still can never execute below this
+# tier system's own floor); Demo Learning Mode is the one explicit,
+# user-controlled way to widen that floor, never a silent override.
+_DEMO_LEARNING_MODE_EXECUTABLE_CONFIDENCE_LEVELS: frozenset[ConfidenceLevel] = frozenset(
+    {"possible_setup", "high_quality", "institutional_grade"}
+)
 
 
 def classify_confidence_level(confidence_pct: float) -> ConfidenceLevel:
@@ -68,6 +81,11 @@ class TradeApprovalRequest:
         critical_news_imminent: Whether high-impact news is imminent.
         data_complete: Whether every required input report was available.
         system_health_ok: Whether platform/system health checks passed.
+        demo_learning_mode: Per the "Demo Learning Mode" production
+            requirement: when True, widens the executable confidence-tier
+            floor to also include "possible_setup" (61-75%), not just
+            "high_quality"/"institutional_grade" (76+). False (the
+            default) preserves the standard RISK_ENGINE.md floor exactly.
     """
 
     confidence_pct: float
@@ -80,6 +98,7 @@ class TradeApprovalRequest:
     critical_news_imminent: bool = False
     data_complete: bool = True
     system_health_ok: bool = True
+    demo_learning_mode: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,9 +128,14 @@ def evaluate_trade(request: TradeApprovalRequest) -> TradeApprovalDecision:
         bypass the Risk Engine."
     """
     confidence_level = classify_confidence_level(request.confidence_pct)
+    executable_levels = (
+        _DEMO_LEARNING_MODE_EXECUTABLE_CONFIDENCE_LEVELS
+        if request.demo_learning_mode
+        else _EXECUTABLE_CONFIDENCE_LEVELS
+    )
     reasons: list[str] = []
 
-    if confidence_level not in _EXECUTABLE_CONFIDENCE_LEVELS:
+    if confidence_level not in executable_levels:
         reasons.append(f"confidence_level_not_executable: {confidence_level}")
     if request.spread_pips > request.max_spread_pips:
         reasons.append(f"spread_excessive: {request.spread_pips} > max {request.max_spread_pips}")

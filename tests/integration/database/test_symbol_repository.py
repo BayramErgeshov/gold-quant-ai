@@ -28,9 +28,7 @@ async def test_get_by_name_returns_none_when_missing(session: AsyncSession) -> N
 async def test_get_primary_returns_the_flagged_symbol(session: AsyncSession) -> None:
     repo = SymbolRepository(session)
     await repo.add(Symbol(name="EURUSD", display_name="Euro vs US Dollar", is_primary=False))
-    await repo.add(
-        Symbol(name="XAUUSD", display_name="Gold vs US Dollar", is_primary=True)
-    )
+    await repo.add(Symbol(name="XAUUSD", display_name="Gold vs US Dollar", is_primary=True))
 
     primary = await repo.get_primary()
 

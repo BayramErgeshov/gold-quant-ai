@@ -73,7 +73,6 @@ def average_r_multiple(realized_pcts: list[float], risk_pcts: list[float]) -> fl
         return 0.0
 
     multiples = [
-        r_multiple(realized, risk)
-        for realized, risk in zip(realized_pcts, risk_pcts, strict=True)
+        r_multiple(realized, risk) for realized, risk in zip(realized_pcts, risk_pcts, strict=True)
     ]
     return sum(multiples) / len(multiples)

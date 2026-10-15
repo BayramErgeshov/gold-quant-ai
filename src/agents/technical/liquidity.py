@@ -33,10 +33,15 @@ class LiquidityPool:
     kind: PoolKind
 
 
-def _find_pools(
+def find_liquidity_pools(
     prices: list[float], *, tolerance_pct: float, kind: PoolKind
 ) -> list[LiquidityPool]:
-    """Cluster nearby swing prices into liquidity pools with >=2 touches."""
+    """Cluster nearby swing prices into liquidity pools with >=2 touches.
+
+    Public (not `TechnicalAgent`-specific) so other departments — e.g.
+    `src.engines.order_flow_engine`'s synthetic liquidity-pool estimation —
+    can reuse the exact same clustering rule rather than duplicating it.
+    """
     if not prices:
         return []
     sorted_prices = sorted(prices)
@@ -101,10 +106,10 @@ class LiquidityAgent(TechnicalAgent):
 
         highs = [swing.candle.high for swing in swings if swing.kind == "high"]
         lows = [swing.candle.low for swing in swings if swing.kind == "low"]
-        buy_side_pools = _find_pools(
+        buy_side_pools = find_liquidity_pools(
             highs, tolerance_pct=self._pool_tolerance_pct, kind="buy_side"
         )
-        sell_side_pools = _find_pools(
+        sell_side_pools = find_liquidity_pools(
             lows, tolerance_pct=self._pool_tolerance_pct, kind="sell_side"
         )
 

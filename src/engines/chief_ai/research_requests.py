@@ -15,8 +15,7 @@ from src.engines.chief_ai.decision import ChiefAIDecision
 _REQUEST_BY_FACTOR: dict[str, tuple[str, str]] = {
     "unknown_market_regime": (
         "What is the current XAUUSD market regime?",
-        "Regime classification failed or was unavailable this cycle, reducing decision "
-        "confidence.",
+        "Regime classification failed or was unavailable this cycle, reducing decision confidence.",
     ),
     "conflicting_departments": (
         "Why do departments disagree on direction this cycle?",

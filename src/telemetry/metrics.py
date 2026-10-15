@@ -14,9 +14,7 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram, Info
 
-PLATFORM_INFO = Info(
-    "gold_quant_ai", "Static platform build information (environment, version)."
-)
+PLATFORM_INFO = Info("gold_quant_ai", "Static platform build information (environment, version).")
 
 PLATFORM_UP = Gauge(
     "gold_quant_ai_up",
@@ -79,9 +77,7 @@ AGENT_RUN_FAILURES_TOTAL = Counter(
 
 # Phase 17 (Monitoring): Infrastructure Metrics
 # (OBSERVABILITY_AND_MONITORING.md "Infrastructure Metrics": "Monitor CPU, RAM, Disk...").
-CPU_USAGE_PERCENT = Gauge(
-    "gold_quant_ai_cpu_usage_percent", "Host CPU utilization, in percent."
-)
+CPU_USAGE_PERCENT = Gauge("gold_quant_ai_cpu_usage_percent", "Host CPU utilization, in percent.")
 
 MEMORY_USAGE_PERCENT = Gauge(
     "gold_quant_ai_memory_usage_percent", "Host memory utilization, in percent."

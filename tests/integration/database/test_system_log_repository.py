@@ -38,9 +38,7 @@ async def test_list_by_source_orders_most_recent_first(session: AsyncSession) ->
     # precise, but the test must not depend on real wall-clock timing).
     repo = SystemLogRepository(session)
     base_time = datetime.now(UTC)
-    await repo.add(
-        SystemLog(level="INFO", source="bootstrap", event="first", created_at=base_time)
-    )
+    await repo.add(SystemLog(level="INFO", source="bootstrap", event="first", created_at=base_time))
     await repo.add(
         SystemLog(
             level="INFO",

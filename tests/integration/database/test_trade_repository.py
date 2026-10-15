@@ -50,9 +50,7 @@ async def test_get_by_broker_ticket_returns_none_when_missing(session: AsyncSess
 async def test_list_open_returns_only_open_trades(session: AsyncSession) -> None:
     symbol = await _make_symbol(session)
     repo = TradeRepository(session)
-    await repo.add(
-        _trade(symbol.id, status="open", opened_at=_BASE_TIME, broker_ticket="T1")
-    )
+    await repo.add(_trade(symbol.id, status="open", opened_at=_BASE_TIME, broker_ticket="T1"))
     await repo.add(_trade(symbol.id, status="closed", broker_ticket="T2"))
     await repo.add(_trade(symbol.id, status="pending", broker_ticket="T3"))
 
@@ -65,9 +63,7 @@ async def test_list_open_returns_only_open_trades(session: AsyncSession) -> None
 async def test_list_by_status_orders_most_recent_first(session: AsyncSession) -> None:
     symbol = await _make_symbol(session)
     repo = TradeRepository(session)
-    await repo.add(
-        _trade(symbol.id, status="closed", broker_ticket="OLD", created_at=_BASE_TIME)
-    )
+    await repo.add(_trade(symbol.id, status="closed", broker_ticket="OLD", created_at=_BASE_TIME))
     await repo.add(
         _trade(
             symbol.id,

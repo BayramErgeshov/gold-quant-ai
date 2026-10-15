@@ -39,6 +39,18 @@ assumed:
    thread, at the cost of blocking other concurrent work (Telegram
    sends, DB writes, ...) for the call's duration — a real, accepted
    trade-off, not an oversight.
+
+A third fix, found the same way: `OrderRequest.volume`/`PositionSizeResult.
+position_size_units` are in the platform's own risk-sizing unit (ounces
+for XAUUSD — the same unit as `entry_price`), but MT5's own `order_send()`
+`"volume"` field is in **lots** (1 lot = `symbol_info(...).trade_contract_size`
+units — 100oz for this broker's XAUUSD). Passing ounces straight through
+would submit an order ~100x too large. `place_order`/`close_position`
+convert ounces -> lots via `_ounces_to_lots()` right before calling MT5;
+`get_open_positions` converts the other way so `OpenPosition.volume`
+stays in the platform's own ounce convention, matching every risk
+calculation that reads it (e.g. `src.workflows.market_update.pipeline.
+exposure_state_from_positions`).
 """
 
 from __future__ import annotations
@@ -46,11 +58,15 @@ from __future__ import annotations
 import asyncio
 import sys
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from src.common.logging import get_logger
 from src.settings import Settings, get_settings
+
+logger = get_logger(__name__)
 
 # MT5's local IPC channel has been measured, empirically, to succeed only
 # ~40% of the time per attempt against a healthy, already-logged-in
@@ -62,6 +78,23 @@ from src.settings import Settings, get_settings
 # cumulative failure probability under 2%.
 _CONNECT_MAX_ATTEMPTS = 8
 _CONNECT_RETRY_BASE_DELAY_SECONDS = 1.5
+
+# The same IPC flakiness affects every other call, not just `initialize()`
+# (an institutional audit finding: reads had no retry at all). A lighter
+# budget than `connect()`'s here keeps one flaky read from stalling a
+# hot-path market-scan/journal cycle, while still absorbing the
+# documented transient-`None` failure mode.
+_READ_MAX_ATTEMPTS = 3
+_READ_RETRY_BASE_DELAY_SECONDS = 0.5
+
+# Plausible range for `trade_contract_size` across the instruments this
+# platform trades (100 for XAUUSD/XAGUSD-style metals, 100000 for a
+# standard FX lot, etc.) -- wide enough to never reject a real
+# instrument's genuine contract size, narrow enough to catch the
+# near-zero garbage a corrupted IPC read produced in production (see
+# `_contract_size`).
+_MIN_PLAUSIBLE_CONTRACT_SIZE = 1.0
+_MAX_PLAUSIBLE_CONTRACT_SIZE = 100_000.0
 
 OrderType = Literal[
     "buy",
@@ -75,6 +108,32 @@ OrderType = Literal[
 ]
 
 _MARKET_ORDER_TYPES: frozenset[OrderType] = frozenset({"buy", "sell"})
+
+# Production incident: a single transient IPC glitch in `symbol_info()`
+# (the same documented flakiness `_contract_size`/`_normalize_volume`
+# already retry for) corrupted the broker-reported `volume_min`
+# (read as 3.0, nonsensical for XAUUSD), silently clamping a correctly-
+# sized ~0.08-lot risk-based order up to 3.0 lots -- an unmanaged,
+# oversized position that sat open with no corresponding journal row
+# for the lifetime of the position, since the broker-side retcode was
+# still 0 (success). Retrying the read reduces how often this happens
+# but can never prove it to zero, so this is the deterministic
+# backstop: normalization may only ever move the requested size by a
+# small, bounded multiple -- anything beyond that multiple AND large
+# enough in absolute terms to matter means the broker-reported limits
+# themselves are unreliable this cycle, so the order is refused rather
+# than trusted.
+#
+# `_MAX_PLAUSIBLE_MINIMUM_CLAMP_LOTS` exists so this never rejects the
+# everyday, legitimate case: a small account's risk-based size landing
+# below the broker's own genuinely tiny minimum (e.g. 0.01 lots for
+# XAUUSD) gets clamped up to that real minimum, which can easily be a
+# large *ratio* (a 0.0008-lot request clamped to 0.01 is 12x) without
+# being wrong -- no real single-instrument minimum is ever a large
+# absolute lot size, so only a clamp target *larger* than any plausible
+# minimum, reached via a *large* ratio, is treated as corruption.
+_MAX_VOLUME_INFLATION_MULTIPLE = 5.0
+_MAX_PLAUSIBLE_MINIMUM_CLAMP_LOTS = 0.5
 
 
 def configure_event_loop_policy() -> None:
@@ -186,8 +245,58 @@ class OpenPosition:
     opened_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class OrderBookLevel:
+    """One price level of a Depth of Market snapshot.
+
+    Attributes:
+        price: The level's price.
+        volume: Resting volume at this level, in the broker's own units.
+        side: "bid" (buy-side resting orders) or "ask" (sell-side).
+    """
+
+    price: float
+    volume: float
+    side: Literal["bid", "ask"]
+
+
+@dataclass(frozen=True, slots=True)
+class OrderBookSnapshot:
+    """A single point-in-time Depth of Market snapshot for one symbol.
+
+    MT5's `market_book_get()` only ever exposes the *current* book — there
+    is no historical DOM API — so every snapshot is necessarily a live
+    read, never reconstructed from storage.
+
+    Attributes:
+        symbol: Broker symbol name.
+        timestamp: When this snapshot was read (UTC).
+        levels: Every level MT5 reported, both sides, in the order MT5
+            returned them (typically asks descending then bids descending).
+    """
+
+    symbol: str
+    timestamp: datetime
+    levels: list[OrderBookLevel]
+
+
 class MT5Client(ABC):
     """Execution gateway interface (MT5_ENGINE.md "Primary Responsibilities")."""
+
+    @abstractmethod
+    async def get_order_book(self, symbol: str) -> OrderBookSnapshot | None:
+        """Fetch the current Depth of Market snapshot for a symbol, if available.
+
+        Args:
+            symbol: Broker symbol name.
+
+        Returns:
+            An `OrderBookSnapshot`, or None if this broker/symbol does not
+            provide DOM data — callers must fall back to synthetic order
+            flow analysis in that case
+            (`src.engines.order_flow_engine.synthetic_order_flow`), never
+            fabricate a book.
+        """
 
     @abstractmethod
     async def connect(self) -> bool:
@@ -317,6 +426,19 @@ class RealMT5Client(MT5Client):
             if initialized:
                 self._connected = True
                 return True
+            # `mt5.initialize()` returning False on its own gives no
+            # indication of *why* (wrong login, terminal not running,
+            # another process already holding the local IPC channel,
+            # etc.) -- `mt5.last_error()` carries the terminal's own
+            # reported reason, logged here so a failed startup is
+            # diagnosable from `live_loop_startup_failed` alone rather
+            # than requiring a manual reproduction.
+            logger.warning(
+                "mt5_initialize_attempt_failed",
+                attempt=attempt,
+                max_attempts=_CONNECT_MAX_ATTEMPTS,
+                last_error=mt5.last_error(),
+            )
             if attempt < _CONNECT_MAX_ATTEMPTS:
                 await asyncio.sleep(_CONNECT_RETRY_BASE_DELAY_SECONDS * attempt)
 
@@ -326,6 +448,44 @@ class RealMT5Client(MT5Client):
     async def is_connected(self) -> bool:
         """Return the last-known connection state from `connect()`."""
         return self._connected
+
+    @staticmethod
+    async def _call_with_retry(
+        call: Callable[[], Any], *, is_valid: Callable[[Any], bool] | None = None
+    ) -> Any:
+        """Retry a flaky MT5 read a few times before treating a bad result as real.
+
+        Per this module's docstring, MT5's local IPC channel fails
+        transiently on any given call, not just `initialize()`. Every
+        `None`-on-failure read method below routes through this so a
+        single transient IPC blip mid-cycle doesn't abort a whole
+        market-scan/journal cycle.
+
+        Args:
+            call: A zero-arg callable wrapping one `MetaTrader5` function call.
+            is_valid: Extra plausibility check beyond "not None". Production
+                incident: a `symbol_info()` struct came back *non-None*
+                with a `trade_contract_size` field read as a near-zero
+                garbage value (not `None`, so the old None-only check
+                accepted it) -- this lets a caller catch that case too by
+                retrying a non-`None` but implausible result the same way
+                as an outright failure.
+
+        Returns:
+            The first result that is not `None` and passes `is_valid` (if
+            given), or the raw `None`/last-attempt result if every
+            attempt failed that bar. A genuinely empty (but non-`None`)
+            result — e.g. no open positions — is returned immediately
+            without wasting further attempts when no `is_valid` is given.
+        """
+        result: Any = None
+        for attempt in range(1, _READ_MAX_ATTEMPTS + 1):
+            result = call()
+            if result is not None and (is_valid is None or is_valid(result)):
+                return result
+            if attempt < _READ_MAX_ATTEMPTS:
+                await asyncio.sleep(_READ_RETRY_BASE_DELAY_SECONDS * attempt)
+        return result
 
     async def get_account_info(self) -> AccountInfo:
         """Fetch account state via `MetaTrader5.account_info()`.
@@ -339,7 +499,7 @@ class RealMT5Client(MT5Client):
         """
         import MetaTrader5 as mt5  # noqa: N813
 
-        info = mt5.account_info()
+        info = await self._call_with_retry(mt5.account_info)
         if info is None:
             raise ConnectionError("MetaTrader5.account_info() returned None; not connected")
         return AccountInfo(
@@ -357,14 +517,119 @@ class RealMT5Client(MT5Client):
             trading_allowed=bool(info.trade_allowed),
         )
 
-    async def place_order(self, request: OrderRequest) -> OrderResult:
-        """Submit an order via `MetaTrader5.order_send()`.
+    async def _contract_size(self, mt5: Any, symbol: str) -> float | None:
+        """Look up `trade_contract_size` (units per 1.0 lot) for a symbol.
+
+        Routed through `_call_with_retry` like every other `symbol_info()`-
+        based read in this module, with an added plausibility check.
+        Production incident: a single transient IPC glitch returned a
+        *non-None* `symbol_info()` struct whose `trade_contract_size`
+        field was garbage (a tiny fraction, not the real ~100 for gold).
+        The old None-only retry condition accepted it immediately,
+        turning a correctly risk-sized ~0.08oz order into one computed
+        as ~3 lots -- about 36x too large -- which the broker filled
+        without complaint (still a syntactically valid order). Retrying
+        on implausible values too, not just `None`, catches this before
+        it ever reaches an order request.
 
         Args:
-            request: The order to place.
+            mt5: The imported `MetaTrader5` module.
+            symbol: Broker symbol name.
 
         Returns:
-            An `OrderResult` reflecting the broker's response.
+            The contract size, or `None` if `symbol_info()` is still
+            `None`/implausible after retrying -- callers must treat this
+            as "unknown, refuse rather than guess," never silently
+            substitute a value that could be wrong by orders of magnitude.
+        """
+
+        def _is_plausible(info: Any) -> bool:
+            size = info.trade_contract_size
+            return (
+                bool(size) and _MIN_PLAUSIBLE_CONTRACT_SIZE <= size <= _MAX_PLAUSIBLE_CONTRACT_SIZE
+            )
+
+        info = await self._call_with_retry(lambda: mt5.symbol_info(symbol), is_valid=_is_plausible)
+        if info is None or not _is_plausible(info):
+            return None
+        return float(info.trade_contract_size)
+
+    async def _ounces_to_lots(self, mt5: Any, symbol: str, ounces: float) -> float | None:
+        """Convert the platform's own risk-sizing unit (ounces) to MT5 lots.
+
+        Returns `None` (never a guessed value) when the contract size
+        could not be determined plausibly this cycle.
+        """
+        contract_size = await self._contract_size(mt5, symbol)
+        if contract_size is None:
+            return None
+        return ounces / contract_size
+
+    async def _normalize_volume(self, mt5: Any, symbol: str, lots: float) -> float:
+        """Round and clamp a lot size to the broker's own volume constraints.
+
+        Per MT5_ENGINE.md: "Automatically normalize order volume using
+        broker limits... Never fail because of invalid volume." A risk
+        calculation can land on a lot size the broker's own
+        `volume_step`/`volume_min`/`volume_max` would otherwise reject
+        (e.g. 0.017 lots when the step is 0.01) — this rounds to the
+        nearest step and clamps into range before the request is ever
+        built. Routed through `_call_with_retry` for the same reason as
+        `_contract_size`: an unretried transient failure here previously
+        skipped the safety clamp entirely rather than retrying for it.
+
+        Args:
+            mt5: The imported `MetaTrader5` module.
+            symbol: Broker symbol name.
+            lots: The raw, unrounded lot size.
+
+        Returns:
+            `lots` rounded to the nearest `volume_step` and clamped to
+            `[volume_min, volume_max]`. Returns `lots` unchanged if
+            `symbol_info()` is still unavailable after retrying, rather
+            than fabricating limits.
+        """
+        info = await self._call_with_retry(lambda: mt5.symbol_info(symbol))
+        if info is None or not info.volume_step:
+            return lots
+        step = float(info.volume_step)
+        normalized = round(lots / step) * step
+        normalized = max(float(info.volume_min), min(float(info.volume_max), normalized))
+        return round(normalized, 8)
+
+    async def _lots_to_ounces(self, mt5: Any, symbol: str, lots: float) -> float:
+        """Convert MT5 lots to the platform's own risk-sizing unit (ounces).
+
+        Falls back to `lots` unchanged (mislabeled unit, but never a
+        fabricated conversion factor) when the contract size could not
+        be determined plausibly this cycle -- this is a read/display
+        path, not an order placement, so a wrong display value is a far
+        smaller risk than guessing at the real one.
+        """
+        contract_size = await self._contract_size(mt5, symbol)
+        if contract_size is None:
+            return lots
+        return lots * contract_size
+
+    async def place_order(self, request: OrderRequest) -> OrderResult:
+        """Validate then submit an order via `MetaTrader5.order_check()`/`order_send()`.
+
+        Per MT5_ENGINE.md: "Validate every order using order_check()
+        before order_send()." A failed pre-flight check is returned
+        directly as a failed `OrderResult` without ever calling
+        `order_send()` — avoids submitting a request the broker's own
+        server-side validation would reject anyway.
+
+        Args:
+            request: The order to place. `request.volume` is in the
+                platform's own unit (ounces for XAUUSD) and is converted
+                to MT5 lots, then rounded/clamped to the broker's own
+                `volume_step`/`volume_min`/`volume_max` — see this
+                module's docstring.
+
+        Returns:
+            An `OrderResult` reflecting the pre-flight check's rejection,
+            or the broker's response to the actual order.
         """
         import MetaTrader5 as mt5  # noqa: N813
 
@@ -379,10 +644,43 @@ class RealMT5Client(MT5Client):
             "sell_stop_limit": mt5.ORDER_TYPE_SELL_STOP_LIMIT,
         }
         is_market_order = request.order_type in _MARKET_ORDER_TYPES
+        raw_lots = await self._ounces_to_lots(mt5, request.symbol, request.volume)
+        if raw_lots is None:
+            return OrderResult(
+                success=False,
+                broker_ticket=None,
+                filled_price=None,
+                error_message=(
+                    f"refused to send order for {request.symbol!r}: could not determine "
+                    "a plausible contract size this cycle, so the requested "
+                    f"{request.volume:.6f} oz cannot be safely converted to lots -- "
+                    "refusing rather than guessing"
+                ),
+            )
+        normalized_volume = await self._normalize_volume(mt5, request.symbol, raw_lots)
+        if (
+            raw_lots > 0
+            and normalized_volume > raw_lots * _MAX_VOLUME_INFLATION_MULTIPLE
+            and normalized_volume > _MAX_PLAUSIBLE_MINIMUM_CLAMP_LOTS
+        ):
+            return OrderResult(
+                success=False,
+                broker_ticket=None,
+                filled_price=None,
+                error_message=(
+                    f"refused to send volume={normalized_volume:.4f} lots: more than "
+                    f"{_MAX_VOLUME_INFLATION_MULTIPLE:.0f}x the risk-sized "
+                    f"{raw_lots:.6f} lots this order actually requested, and larger than "
+                    f"any plausible real minimum ({_MAX_PLAUSIBLE_MINIMUM_CLAMP_LOTS:.2f} "
+                    "lots) -- likely a corrupted broker-reported "
+                    "volume_min/volume_max/contract_size read rather than this symbol's "
+                    "real minimum tradable size"
+                ),
+            )
         mt5_request: dict[str, object] = {
             "action": mt5.TRADE_ACTION_DEAL if is_market_order else mt5.TRADE_ACTION_PENDING,
             "symbol": request.symbol,
-            "volume": request.volume,
+            "volume": normalized_volume,
             "type": order_type_map[request.order_type],
             "sl": request.stop_loss,
             "magic": request.magic_number,
@@ -392,6 +690,25 @@ class RealMT5Client(MT5Client):
             mt5_request["tp"] = request.take_profit
         if not is_market_order and request.price is not None:
             mt5_request["price"] = request.price
+
+        check_result = mt5.order_check(mt5_request)
+        if check_result is None:
+            return OrderResult(
+                success=False,
+                broker_ticket=None,
+                filled_price=None,
+                error_message=f"order_check() returned None: {mt5.last_error()}",
+            )
+        if check_result.retcode != 0:
+            return OrderResult(
+                success=False,
+                broker_ticket=None,
+                filled_price=None,
+                error_message=(
+                    f"order_check() rejected: retcode={check_result.retcode}: "
+                    f"{check_result.comment}"
+                ),
+            )
 
         result = mt5.order_send(mt5_request)
         return self._to_order_result(result)
@@ -434,7 +751,9 @@ class RealMT5Client(MT5Client):
 
         Args:
             broker_ticket: The position ticket to close.
-            volume: Volume to close; None closes the full position volume.
+            volume: Volume to close, in the platform's own unit (ounces
+                for XAUUSD); None closes the full position at MT5's own
+                reported lot size (no conversion needed in that case).
 
         Returns:
             An `OrderResult` reflecting the broker's response.
@@ -454,10 +773,23 @@ class RealMT5Client(MT5Client):
         close_type = (
             mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
         )
+        # Never close more than the position's own broker-confirmed open
+        # volume -- a corrupted `trade_contract_size` read in
+        # `_ounces_to_lots` can only ever make a partial close too small
+        # (a safe failure, leaving a small remainder) rather than
+        # accidentally flipping/over-closing the position. If the
+        # conversion can't be done plausibly at all this cycle, fall
+        # back to closing the full position -- always a valid, safe
+        # operation, unlike guessing at a partial amount.
+        close_volume = position.volume
+        if volume is not None:
+            requested_lots = await self._ounces_to_lots(mt5, position.symbol, volume)
+            if requested_lots is not None:
+                close_volume = min(requested_lots, position.volume)
         mt5_request: dict[str, object] = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": position.symbol,
-            "volume": volume if volume is not None else position.volume,
+            "volume": close_volume,
             "type": close_type,
             "position": position.ticket,
         }
@@ -515,7 +847,9 @@ class RealMT5Client(MT5Client):
         if mt5_timeframe is None:
             raise ValueError(f"Unsupported timeframe for MT5 candles: {timeframe!r}")
 
-        rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, count)
+        rates = await self._call_with_retry(
+            lambda: mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, count)
+        )
         if rates is None:
             return []
         return [
@@ -541,12 +875,48 @@ class RealMT5Client(MT5Client):
         """
         import MetaTrader5 as mt5  # noqa: N813
 
-        tick = mt5.symbol_info_tick(symbol)
+        tick = await self._call_with_retry(lambda: mt5.symbol_info_tick(symbol))
         if tick is None:
             raise ConnectionError(f"MetaTrader5.symbol_info_tick({symbol!r}) returned None")
         return SymbolTick(
             bid=tick.bid, ask=tick.ask, timestamp=datetime.fromtimestamp(tick.time, tz=UTC)
         )
+
+    async def get_order_book(self, symbol: str) -> OrderBookSnapshot | None:
+        """Fetch the current DOM snapshot via `MetaTrader5.market_book_get()`.
+
+        Args:
+            symbol: Broker symbol name.
+
+        Returns:
+            An `OrderBookSnapshot`, or None if this symbol has no DOM
+            subscription available (`market_book_add()` failed) or MT5
+            reported no levels — never a fabricated book.
+        """
+        import MetaTrader5 as mt5  # noqa: N813
+
+        if not mt5.market_book_add(symbol):
+            return None
+        try:
+            book = await self._call_with_retry(lambda: mt5.market_book_get(symbol))
+        finally:
+            mt5.market_book_release(symbol)
+
+        if not book:
+            return None
+
+        levels = [
+            OrderBookLevel(
+                price=entry.price,
+                volume=entry.volume_dbl or float(entry.volume),
+                side="bid" if entry.type == mt5.BOOK_TYPE_BUY else "ask",
+            )
+            for entry in book
+            if entry.type in (mt5.BOOK_TYPE_BUY, mt5.BOOK_TYPE_SELL)
+        ]
+        if not levels:
+            return None
+        return OrderBookSnapshot(symbol=symbol, timestamp=datetime.now(UTC), levels=levels)
 
     async def get_open_positions(
         self, *, symbol: str | None = None, magic_number: int | None = None
@@ -558,11 +928,14 @@ class RealMT5Client(MT5Client):
             magic_number: If given, only positions with this magic number.
 
         Returns:
-            Every matching `OpenPosition`.
+            Every matching `OpenPosition`, `.volume` converted from MT5
+            lots to the platform's own unit (ounces for XAUUSD).
         """
         import MetaTrader5 as mt5  # noqa: N813
 
-        positions = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
+        positions = await self._call_with_retry(
+            lambda: mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
+        )
         if not positions:
             return []
 
@@ -571,7 +944,7 @@ class RealMT5Client(MT5Client):
                 ticket=str(position.ticket),
                 symbol=position.symbol,
                 direction="buy" if position.type == mt5.ORDER_TYPE_BUY else "sell",
-                volume=position.volume,
+                volume=await self._lots_to_ounces(mt5, position.symbol, position.volume),
                 entry_price=position.price_open,
                 stop_loss=position.sl,
                 take_profit=position.tp or None,

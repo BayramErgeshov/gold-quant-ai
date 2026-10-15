@@ -9,6 +9,7 @@ technique used elsewhere in this codebase for `httpx.AsyncClient`.
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -57,6 +58,8 @@ class _FakeMT5:
     TIMEFRAME_D1 = 16408
     TIMEFRAME_W1 = 32769
     TIMEFRAME_MN1 = 49153
+    BOOK_TYPE_SELL = 1
+    BOOK_TYPE_BUY = 2
 
     def __init__(self) -> None:
         self.initialize_result = True
@@ -114,6 +117,18 @@ class _FakeMT5:
         self.symbol_info_tick_result: object | None = SimpleNamespace(
             bid=2001.0, ask=2001.5, time=1700000100
         )
+        self.symbol_info_result: object | None = SimpleNamespace(
+            trade_contract_size=100.0, volume_min=0.01, volume_max=100.0, volume_step=0.01
+        )
+        self.order_check_result: object | None = SimpleNamespace(retcode=0, comment="Done")
+        self.last_order_check_request: dict[str, object] | None = None
+        self.market_book_add_result = True
+        self.market_book_get_result: list[object] | None = [
+            SimpleNamespace(type=self.BOOK_TYPE_SELL, price=2001.5, volume=10, volume_dbl=10.0),
+            SimpleNamespace(type=self.BOOK_TYPE_BUY, price=2001.0, volume=20, volume_dbl=20.0),
+        ]
+        self.market_book_add_calls: list[str] = []
+        self.market_book_release_calls: list[str] = []
 
     def initialize(self, **kwargs: object) -> bool:
         self.initialize_call_count += 1
@@ -124,6 +139,13 @@ class _FakeMT5:
 
     def account_info(self) -> object | None:
         return self.account_info_result
+
+    def symbol_info(self, symbol: str) -> object | None:
+        return self.symbol_info_result
+
+    def order_check(self, request: dict[str, object]) -> object | None:
+        self.last_order_check_request = request
+        return self.order_check_result
 
     def order_send(self, request: dict[str, object]) -> object | None:
         self.last_request = request
@@ -142,12 +164,22 @@ class _FakeMT5:
     def symbol_info_tick(self, symbol: str) -> object | None:
         return self.symbol_info_tick_result
 
+    def market_book_add(self, symbol: str) -> bool:
+        self.market_book_add_calls.append(symbol)
+        return self.market_book_add_result
+
+    def market_book_get(self, symbol: str) -> list[object] | None:
+        return self.market_book_get_result
+
+    def market_book_release(self, symbol: str) -> None:
+        self.market_book_release_calls.append(symbol)
+
     def last_error(self) -> tuple[int, str]:
         return self.last_error_result
 
 
 @pytest.fixture
-def fake_mt5() -> _FakeMT5:
+def fake_mt5() -> Iterator[_FakeMT5]:
     fake = _FakeMT5()
     with patch.dict(sys.modules, {"MetaTrader5": fake}):
         yield fake
@@ -192,7 +224,18 @@ async def test_connect_succeeds(fake_mt5: _FakeMT5) -> None:
     assert fake_mt5.initialize_call_count == 1
 
 
-async def test_connect_omits_unconfigured_credentials(fake_mt5: _FakeMT5) -> None:
+async def test_connect_omits_unconfigured_credentials(
+    fake_mt5: _FakeMT5, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `MT5EnvSettings()` reads the real process environment like any
+    # `BaseSettings` subclass; force these to explicitly *empty* (not
+    # merely absent) so this test's "unconfigured" simulation holds even
+    # with a real `.env` present -- `get_settings()`'s own
+    # `load_dotenv(override=False)` call only fills in variables that are
+    # entirely absent from `os.environ`, so an empty string here survives
+    # untouched, while a deleted variable would just be refilled from `.env`.
+    for var in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER", "MT5_TERMINAL_PATH"):
+        monkeypatch.setenv(var, "")
     settings = get_settings().model_copy(update={"mt5_env": MT5EnvSettings()})
     client = RealMT5Client(settings)
 
@@ -263,8 +306,33 @@ async def test_get_account_info_raises_when_none(fake_mt5: _FakeMT5) -> None:
     fake_mt5.account_info_result = None
     client = RealMT5Client(get_settings())
 
-    with pytest.raises(ConnectionError):
+    with (
+        patch("src.core.execution.mt5_client.asyncio.sleep", AsyncMock()),
+        pytest.raises(ConnectionError),
+    ):
         await client.get_account_info()
+
+
+async def test_get_account_info_retries_and_succeeds_on_a_later_attempt(
+    fake_mt5: _FakeMT5,
+) -> None:
+    call_count = 0
+    successful_result = fake_mt5.account_info_result
+
+    def flaky_account_info() -> object | None:
+        nonlocal call_count
+        call_count += 1
+        return None if call_count < 2 else successful_result
+
+    fake_mt5.account_info = flaky_account_info  # type: ignore[method-assign]
+    client = RealMT5Client(get_settings())
+
+    with patch("src.core.execution.mt5_client.asyncio.sleep", AsyncMock()) as mock_sleep:
+        info = await client.get_account_info()
+
+    assert info.login == 12345
+    assert call_count == 2
+    mock_sleep.assert_awaited_once()
 
 
 async def test_place_market_order_sends_deal_action(fake_mt5: _FakeMT5) -> None:
@@ -374,10 +442,28 @@ async def test_close_position_sends_opposite_direction_deal(fake_mt5: _FakeMT5) 
 async def test_close_position_partial_volume(fake_mt5: _FakeMT5) -> None:
     client = RealMT5Client(get_settings())
 
+    # 0.5 ounces (the platform's own unit) at a 100oz/lot contract size
+    # converts to 0.005 lots for MT5's own `order_send()` request.
     await client.close_position("555", volume=0.5)
 
     assert fake_mt5.last_request is not None
-    assert fake_mt5.last_request["volume"] == 0.5
+    assert fake_mt5.last_request["volume"] == pytest.approx(0.005)
+
+
+async def test_close_position_partial_volume_never_exceeds_the_positions_own_volume(
+    fake_mt5: _FakeMT5,
+) -> None:
+    # Regression test for a production incident: a corrupted
+    # `trade_contract_size` read inflated an ounces->lots conversion far
+    # beyond what was intended. A partial close must never ask the
+    # broker to close more than the position's own actual open volume
+    # (1.0 lot here), regardless of what the conversion produces.
+    client = RealMT5Client(get_settings())
+
+    await client.close_position("555", volume=500.0)
+
+    assert fake_mt5.last_request is not None
+    assert fake_mt5.last_request["volume"] == pytest.approx(1.0)
 
 
 async def test_close_position_returns_failure_when_not_found(fake_mt5: _FakeMT5) -> None:
@@ -442,8 +528,33 @@ async def test_get_symbol_tick_raises_when_none(fake_mt5: _FakeMT5) -> None:
     fake_mt5.symbol_info_tick_result = None
     client = RealMT5Client(get_settings())
 
-    with pytest.raises(ConnectionError):
+    with (
+        patch("src.core.execution.mt5_client.asyncio.sleep", AsyncMock()),
+        pytest.raises(ConnectionError),
+    ):
         await client.get_symbol_tick("XAUUSD")
+
+
+async def test_get_symbol_tick_retries_and_succeeds_on_a_later_attempt(
+    fake_mt5: _FakeMT5,
+) -> None:
+    call_count = 0
+    successful_result = fake_mt5.symbol_info_tick_result
+
+    def flaky_symbol_info_tick(symbol: str) -> object | None:
+        nonlocal call_count
+        call_count += 1
+        return None if call_count < 2 else successful_result
+
+    fake_mt5.symbol_info_tick = flaky_symbol_info_tick  # type: ignore[method-assign]
+    client = RealMT5Client(get_settings())
+
+    with patch("src.core.execution.mt5_client.asyncio.sleep", AsyncMock()) as mock_sleep:
+        tick = await client.get_symbol_tick("XAUUSD")
+
+    assert tick.bid == 2001.0
+    assert call_count == 2
+    mock_sleep.assert_awaited_once()
 
 
 async def test_get_open_positions_maps_fields(fake_mt5: _FakeMT5) -> None:
@@ -459,6 +570,252 @@ async def test_get_open_positions_maps_fields(fake_mt5: _FakeMT5) -> None:
     assert position.stop_loss == 1990.0
     assert position.take_profit == 2020.0
     assert position.magic_number == 42
+    # 1.0 MT5 lot at a 100oz/lot contract size -> 100.0 ounces (the
+    # platform's own unit), not the raw lot value.
+    assert position.volume == pytest.approx(100.0)
+
+
+async def test_place_order_converts_ounces_to_lots(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=250.0,  # ounces
+        stop_loss=1990.0,
+        take_profit=2010.0,
+        magic_number=42,
+    )
+
+    await client.place_order(request)
+
+    assert fake_mt5.last_request is not None
+    assert fake_mt5.last_request["volume"] == pytest.approx(2.5)  # 250oz / 100oz per lot
+
+
+async def test_place_order_calls_order_check_before_order_send(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=250.0,
+        stop_loss=1990.0,
+        take_profit=None,
+        magic_number=42,
+    )
+
+    await client.place_order(request)
+
+    assert fake_mt5.last_order_check_request is not None
+    assert fake_mt5.last_order_check_request["volume"] == pytest.approx(2.5)
+
+
+async def test_place_order_normalizes_volume_to_the_broker_step(fake_mt5: _FakeMT5) -> None:
+    fake_mt5.symbol_info_result = SimpleNamespace(
+        trade_contract_size=100.0, volume_min=0.01, volume_max=100.0, volume_step=0.01
+    )
+    client = RealMT5Client(get_settings())
+    # 17.3oz / 100oz-per-lot = 0.173 lots, not aligned to a 0.01 step.
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=17.3,
+        stop_loss=1990.0,
+        take_profit=None,
+        magic_number=42,
+    )
+
+    await client.place_order(request)
+
+    assert fake_mt5.last_request is not None
+    assert fake_mt5.last_request["volume"] == pytest.approx(0.17)
+
+
+async def test_place_order_clamps_volume_below_broker_minimum(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+    # 0.5oz / 100oz-per-lot = 0.005 lots, below the 0.01 minimum.
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=0.5,
+        stop_loss=1990.0,
+        take_profit=None,
+        magic_number=42,
+    )
+
+    await client.place_order(request)
+
+    assert fake_mt5.last_request is not None
+    assert fake_mt5.last_request["volume"] == pytest.approx(0.01)
+
+
+async def test_place_order_refuses_a_volume_far_beyond_what_was_requested(
+    fake_mt5: _FakeMT5,
+) -> None:
+    # Regression test for a production incident: a transient IPC glitch
+    # returned a corrupted `volume_min` (3.0, nonsensical for XAUUSD),
+    # which silently clamped a correctly risk-sized ~0.08-lot order up to
+    # 3.0 lots (a ~36x inflation) -- an unmanaged, oversized position
+    # that sat open for the rest of its lifetime since nothing else
+    # noticed. The broker-side retcode was still 0 (success), so only a
+    # client-side check independent of whatever the broker itself
+    # reports can catch this.
+    fake_mt5.symbol_info_result = SimpleNamespace(
+        trade_contract_size=100.0, volume_min=3.0, volume_max=100.0, volume_step=0.01
+    )
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=8.19,  # ounces -> 0.0819 lots, far below the corrupted "minimum"
+        stop_loss=1990.0,
+        take_profit=None,
+        magic_number=42,
+    )
+
+    result = await client.place_order(request)
+
+    assert result.success is False
+    assert result.error_message is not None
+    assert "x the risk-sized" in result.error_message
+    assert fake_mt5.last_request is None
+
+
+async def test_place_order_returns_failure_without_calling_order_send_when_check_rejects(
+    fake_mt5: _FakeMT5,
+) -> None:
+    fake_mt5.order_check_result = SimpleNamespace(retcode=10014, comment="Invalid volume")
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=250.0,
+        stop_loss=1990.0,
+        take_profit=None,
+        magic_number=42,
+    )
+
+    result = await client.place_order(request)
+
+    assert result.success is False
+    assert result.error_message is not None
+    assert "Invalid volume" in result.error_message
+    assert fake_mt5.last_request is None  # order_send() was never called
+
+
+async def test_place_order_returns_failure_when_order_check_returns_none(
+    fake_mt5: _FakeMT5,
+) -> None:
+    fake_mt5.order_check_result = None
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=250.0,
+        stop_loss=1990.0,
+        take_profit=None,
+        magic_number=42,
+    )
+
+    result = await client.place_order(request)
+
+    assert result.success is False
+    assert result.error_message is not None
+    assert "order_check() returned None" in result.error_message
+    assert fake_mt5.last_request is None
+
+
+async def test_place_order_refuses_rather_than_guess_when_symbol_info_missing(
+    fake_mt5: _FakeMT5,
+) -> None:
+    # Regression test for a production incident: `_contract_size` used
+    # to fall back to a guessed `1.0` when `symbol_info()` stayed `None`
+    # after retrying, which previously turned a 2.5oz order into a
+    # 2.5-*lot* request (~100x too large for gold). The contract size is
+    # unknowable this cycle, so the order must be refused outright
+    # rather than sized from a guess.
+    fake_mt5.symbol_info_result = None
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=2.5,
+        stop_loss=1990.0,
+        take_profit=2010.0,
+        magic_number=42,
+    )
+
+    result = await client.place_order(request)
+
+    assert result.success is False
+    assert result.error_message is not None
+    assert "contract size" in result.error_message
+    assert fake_mt5.last_request is None
+
+
+async def test_place_order_refuses_rather_than_guess_when_contract_size_is_implausible(
+    fake_mt5: _FakeMT5,
+) -> None:
+    # Regression test for the real production incident: `symbol_info()`
+    # returned a *non-None* struct whose `trade_contract_size` was
+    # garbage (a tiny fraction, not gold's real ~100) -- the old
+    # None-only check accepted it immediately, converting a correctly
+    # risk-sized ~0.08oz order into one computed as ~3 lots.
+    fake_mt5.symbol_info_result = SimpleNamespace(
+        trade_contract_size=0.0273, volume_min=0.01, volume_max=100.0, volume_step=0.01
+    )
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=8.19,
+        stop_loss=1990.0,
+        take_profit=None,
+        magic_number=42,
+    )
+
+    result = await client.place_order(request)
+
+    assert result.success is False
+    assert result.error_message is not None
+    assert "contract size" in result.error_message
+    assert fake_mt5.last_request is None
+
+
+async def test_contract_size_retries_and_succeeds_on_a_later_attempt(
+    fake_mt5: _FakeMT5,
+) -> None:
+    # Reproduces the bug this fixes: a transient `symbol_info()` failure
+    # (this environment's own well-documented flaky-read rate) previously
+    # fell straight through to the 1.0 fallback with no retry, turning a
+    # 250oz order into a 250-*lot* request (~100x too large for gold) --
+    # rejected by the broker as "Invalid volume" even though the signal
+    # itself was perfectly valid.
+    call_count = 0
+    successful_result = fake_mt5.symbol_info_result
+
+    def flaky_symbol_info(symbol: str) -> object | None:
+        nonlocal call_count
+        call_count += 1
+        return None if call_count < 2 else successful_result
+
+    fake_mt5.symbol_info = flaky_symbol_info  # type: ignore[method-assign]
+    client = RealMT5Client(get_settings())
+    request = OrderRequest(
+        symbol="XAUUSD",
+        order_type="buy",
+        volume=250.0,
+        stop_loss=1990.0,
+        take_profit=2010.0,
+        magic_number=42,
+    )
+
+    with patch("src.core.execution.mt5_client.asyncio.sleep", AsyncMock()):
+        await client.place_order(request)
+
+    assert fake_mt5.last_request is not None
+    # Correctly converted (250oz / 100oz-per-lot = 2.5 lots), not the
+    # unconverted 250 "lots" the pre-fix fallback would have sent.
+    assert fake_mt5.last_request["volume"] == pytest.approx(2.5)
 
 
 async def test_get_open_positions_filters_by_symbol(fake_mt5: _FakeMT5) -> None:
@@ -467,6 +824,58 @@ async def test_get_open_positions_filters_by_symbol(fake_mt5: _FakeMT5) -> None:
     await client.get_open_positions(symbol="XAUUSD")
 
     assert fake_mt5.last_positions_get_kwargs == {"symbol": "XAUUSD"}
+
+
+async def test_get_order_book_maps_levels(fake_mt5: _FakeMT5) -> None:
+    client = RealMT5Client(get_settings())
+
+    book = await client.get_order_book("XAUUSD")
+
+    assert book is not None
+    assert book.symbol == "XAUUSD"
+    assert len(book.levels) == 2
+    ask, bid = book.levels
+    assert ask.side == "ask"
+    assert ask.price == 2001.5
+    assert bid.side == "bid"
+    assert bid.price == 2001.0
+    assert fake_mt5.market_book_add_calls == ["XAUUSD"]
+    assert fake_mt5.market_book_release_calls == ["XAUUSD"]
+
+
+async def test_get_order_book_returns_none_when_subscription_fails(fake_mt5: _FakeMT5) -> None:
+    fake_mt5.market_book_add_result = False
+    client = RealMT5Client(get_settings())
+
+    book = await client.get_order_book("XAUUSD")
+
+    assert book is None
+    assert fake_mt5.market_book_release_calls == []
+
+
+async def test_get_order_book_returns_none_when_no_levels(fake_mt5: _FakeMT5) -> None:
+    fake_mt5.market_book_get_result = []
+    client = RealMT5Client(get_settings())
+
+    book = await client.get_order_book("XAUUSD")
+
+    assert book is None
+    assert fake_mt5.market_book_release_calls == ["XAUUSD"]
+
+
+async def test_get_order_book_releases_subscription_even_if_get_raises(
+    fake_mt5: _FakeMT5,
+) -> None:
+    def _raise(symbol: str) -> list[object] | None:
+        raise RuntimeError("boom")
+
+    fake_mt5.market_book_get = _raise  # type: ignore[method-assign]
+    client = RealMT5Client(get_settings())
+
+    with pytest.raises(RuntimeError):
+        await client.get_order_book("XAUUSD")
+
+    assert fake_mt5.market_book_release_calls == ["XAUUSD"]
 
 
 async def test_get_open_positions_filters_by_magic_number(fake_mt5: _FakeMT5) -> None:

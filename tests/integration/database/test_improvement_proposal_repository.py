@@ -23,7 +23,7 @@ def _proposal(**overrides: object) -> ImprovementProposal:
         "recommendation": "Backtest wider stops in high-volatility regimes.",
     }
     defaults.update(overrides)
-    return ImprovementProposal(**defaults)  # type: ignore[arg-type]
+    return ImprovementProposal(**defaults)
 
 
 async def test_list_pending_returns_only_pending_proposals(session: AsyncSession) -> None:
@@ -39,9 +39,7 @@ async def test_list_pending_returns_only_pending_proposals(session: AsyncSession
 
 async def test_list_pending_orders_oldest_first(session: AsyncSession) -> None:
     repo = ImprovementProposalRepository(session)
-    await repo.add(
-        _proposal(title="Newer", created_at=_BASE_TIME + timedelta(hours=1))
-    )
+    await repo.add(_proposal(title="Newer", created_at=_BASE_TIME + timedelta(hours=1)))
     await repo.add(_proposal(title="Older", created_at=_BASE_TIME))
 
     pending = await repo.list_pending()
@@ -59,3 +57,16 @@ async def test_list_pending_respects_limit(session: AsyncSession) -> None:
     pending = await repo.list_pending(limit=2)
 
     assert len(pending) == 2
+
+
+async def test_exists_with_title_true_after_adding(session: AsyncSession) -> None:
+    repo = ImprovementProposalRepository(session)
+    await repo.add(_proposal(title="Widen stops in ranging regimes"))
+
+    assert await repo.exists_with_title("Widen stops in ranging regimes") is True
+
+
+async def test_exists_with_title_false_when_absent(session: AsyncSession) -> None:
+    repo = ImprovementProposalRepository(session)
+
+    assert await repo.exists_with_title("Never proposed") is False

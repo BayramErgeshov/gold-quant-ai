@@ -24,9 +24,7 @@ _PROPOSAL_STATUSES = "('pending', 'approved', 'rejected')"
 
 def _timestamp_columns() -> list[sa.Column[Any]]:
     return [
-        sa.Column(
-            "id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False
-        ),
+        sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -49,9 +47,7 @@ def upgrade() -> None:
         sa.Column("expected_benefit", sa.Text(), nullable=False),
         sa.Column("potential_risk", sa.Text(), nullable=False),
         sa.Column("implementation_difficulty", sa.String(length=10), nullable=False),
-        sa.Column(
-            "validation_results", sa.JSON(), server_default=sa.text("'{}'"), nullable=False
-        ),
+        sa.Column("validation_results", sa.JSON(), server_default=sa.text("'{}'"), nullable=False),
         sa.Column("recommendation", sa.Text(), nullable=False),
         sa.Column("status", sa.String(length=10), server_default="pending", nullable=False),
         sa.PrimaryKeyConstraint("id"),

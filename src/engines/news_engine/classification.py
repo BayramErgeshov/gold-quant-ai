@@ -13,12 +13,19 @@ from src.utils.keyword_classifier import primary_category
 
 NEWS_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "central_bank": (
-        "federal reserve", "fomc", "rate decision", "central bank",
-        "interest rate decision", "monetary policy",
+        "federal reserve",
+        "fomc",
+        "rate decision",
+        "central bank",
+        "interest rate decision",
+        "monetary policy",
     ),
     "inflation": ("inflation", "cpi", "consumer price index", "ppi", "pce"),
     "employment": (
-        "nonfarm payrolls", "non-farm payrolls", "unemployment", "jobless claims",
+        "nonfarm payrolls",
+        "non-farm payrolls",
+        "unemployment",
+        "jobless claims",
         "employment report",
     ),
     "gdp": ("gdp", "gross domestic product", "economic growth"),

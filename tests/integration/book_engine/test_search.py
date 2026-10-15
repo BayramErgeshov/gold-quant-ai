@@ -12,6 +12,7 @@ from src.engines.book_engine.pipeline import BookIngestionPipeline
 from src.engines.book_engine.search import BookSemanticSearch
 from src.engines.book_engine.text_extraction import ExtractedPage
 from src.repositories.book_chunk_repository import BookChunkRepository
+from src.repositories.book_claim_repository import BookClaimRepository
 from src.repositories.book_repository import BookRepository
 from src.repositories.concept_repository import ConceptRelationshipRepository, ConceptRepository
 from tests.integration.book_engine._fakes import (
@@ -30,13 +31,14 @@ async def _ingest_one_book(session: AsyncSession, qdrant: FakeQdrantClient) -> N
     pipeline = BookIngestionPipeline(
         book_repository=BookRepository(session),
         chunk_repository=BookChunkRepository(session),
+        claim_repository=BookClaimRepository(session),
         concept_repository=ConceptRepository(session),
         concept_relationship_repository=ConceptRelationshipRepository(session),
         embedding_provider=FakeEmbeddingProvider(dimension=8),
         qdrant_client=qdrant,  # type: ignore[arg-type]
     )
     with patch(
-        "src.engines.book_engine.pipeline.extract_pages",
+        "src.engines.book_engine.pipeline.extract_document_pages",
         return_value=[ExtractedPage(page_number=1, text=_TEXT, used_ocr=False)],
     ):
         await pipeline.ingest(Path("book.pdf"), title="Book", author="Author")

@@ -13,8 +13,16 @@ pytestmark = pytest.mark.unit
 def _range_bound_candles() -> list:
     # Repeated touches of ~110 resistance and ~90 support, ending mid-range.
     highs_lows = [
-        (95, 90), (109, 104), (95, 91), (89, 85), (95, 91),
-        (110, 105), (95, 91), (91, 86), (96, 91), (109, 104),
+        (95, 90),
+        (109, 104),
+        (95, 91),
+        (89, 85),
+        (95, 91),
+        (110, 105),
+        (95, 91),
+        (91, 86),
+        (96, 91),
+        (109, 104),
         (100, 95),
     ]
     return [

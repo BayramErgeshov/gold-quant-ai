@@ -37,9 +37,7 @@ async def test_bootstrap_returns_true_when_all_checks_healthy() -> None:
 
 async def test_bootstrap_returns_false_when_critical_check_fails() -> None:
     with (
-        patch(
-            "src.bootstrap.run_startup_diagnostics", AsyncMock(return_value=_DEGRADED_RESULTS)
-        ),
+        patch("src.bootstrap.run_startup_diagnostics", AsyncMock(return_value=_DEGRADED_RESULTS)),
         patch("src.bootstrap.start_metrics_server"),
     ):
         healthy = await bootstrap()

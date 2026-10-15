@@ -160,9 +160,7 @@ def _close_position(
 ) -> SimulatedTrade:
     exit_price = _apply_exit_costs(position.direction, raw_exit_price, costs)
     direction_sign = 1 if position.direction == "buy" else -1
-    return_pct = (
-        (exit_price - position.entry_price) / position.entry_price * 100 * direction_sign
-    )
+    return_pct = (exit_price - position.entry_price) / position.entry_price * 100 * direction_sign
     return SimulatedTrade(
         direction=position.direction,
         entry_timestamp=position.entry_timestamp,

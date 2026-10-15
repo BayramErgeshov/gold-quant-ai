@@ -81,6 +81,32 @@ async def test_list_range_filters_by_start_and_end(session: AsyncSession) -> Non
     ]
 
 
+async def test_list_most_recent_returns_the_tail_not_the_head(session: AsyncSession) -> None:
+    symbol = await _make_symbol(session)
+    repo = CandleRepository(session)
+    await repo.insert_new([_candle(symbol.id, offset) for offset in range(10)])
+
+    results = await repo.list_most_recent(symbol.id, "H1", count=3)
+
+    assert [_utc(c.timestamp) for c in results] == [
+        _BASE_TIME + timedelta(hours=7),
+        _BASE_TIME + timedelta(hours=8),
+        _BASE_TIME + timedelta(hours=9),
+    ]
+
+
+async def test_list_most_recent_returns_everything_when_count_exceeds_history(
+    session: AsyncSession,
+) -> None:
+    symbol = await _make_symbol(session)
+    repo = CandleRepository(session)
+    await repo.insert_new([_candle(symbol.id, offset) for offset in range(3)])
+
+    results = await repo.list_most_recent(symbol.id, "H1", count=100)
+
+    assert len(results) == 3
+
+
 async def test_latest_timestamp_returns_none_when_no_candles(session: AsyncSession) -> None:
     symbol = await _make_symbol(session)
     repo = CandleRepository(session)

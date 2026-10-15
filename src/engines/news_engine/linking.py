@@ -36,7 +36,5 @@ async def find_related_articles(
     if article.category is None:
         return []
 
-    candidates = await repository.list_by_category(
-        article.category, since=None, limit=limit + 1
-    )
+    candidates = await repository.list_by_category(article.category, since=None, limit=limit + 1)
     return [candidate for candidate in candidates if candidate.id != article.id][:limit]

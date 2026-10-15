@@ -46,9 +46,7 @@ async def test_link_is_idempotent(session: AsyncSession) -> None:
     liquidity = await concepts.get_or_create("Liquidity")
 
     first = await relationships.link(order_block.id, liquidity.id, relationship_type="related_to")
-    second = await relationships.link(
-        order_block.id, liquidity.id, relationship_type="related_to"
-    )
+    second = await relationships.link(order_block.id, liquidity.id, relationship_type="related_to")
 
     assert first.id == second.id
 

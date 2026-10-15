@@ -70,8 +70,9 @@ async def _timed(name: str, critical: bool, probe: Callable[[], Awaitable[str]])
         detail = f"{type(exc).__name__}: {exc}"
         healthy = False
     duration_ms = (time.perf_counter() - started_at) * 1000
-    return CheckResult(name=name, healthy=healthy, detail=detail, duration_ms=duration_ms,
-                        critical=critical)
+    return CheckResult(
+        name=name, healthy=healthy, detail=detail, duration_ms=duration_ms, critical=critical
+    )
 
 
 async def check_postgres(settings: Settings) -> CheckResult:

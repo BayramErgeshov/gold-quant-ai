@@ -9,7 +9,8 @@ forward-return outcome, and persists the matches for future retrieval
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 
 from src.common.logging import get_logger
 from src.engines.historical_engine.regime_detection import compute_features
@@ -89,6 +90,8 @@ class HistoricalSimilarityService:
         forward_bars: int = 10,
         top_n: int = 100,
         weights: FeatureWeights | None = None,
+        as_of_timestamp: datetime | None = None,
+        persist_matches: bool = True,
     ) -> SimilaritySearchResult:
         """Find historical analogues of the most recent window and their outcomes.
 
@@ -102,6 +105,21 @@ class HistoricalSimilarityService:
             top_n: Maximum number of matches to keep
                 (HISTORICAL_RESEARCH_ENGINE.md: "Find Top 100").
             weights: Feature dimension weighting; defaults to equal weighting.
+            as_of_timestamp: If set, only candles at or before this moment
+                are considered at all -- both as the query window and as
+                candidates. Required for Market Replay Mode, where the
+                database already holds candles "from the future" relative
+                to the replay's current position; without this bound the
+                query window would silently become the DB's most recent
+                candles instead of the replay's own current moment, and
+                candidate matches could leak future outcomes. `None`
+                (the default) preserves live behavior: "most recent
+                window in the database."
+            persist_matches: Whether to persist matches to
+                `historical_similarities`. Market Replay Mode passes
+                `False` -- a replay session's queries are not real
+                trading decisions and must never mix into the same table
+                real live scans write to.
 
         Returns:
             A `SimilaritySearchResult` with the ranked matches and
@@ -112,6 +130,8 @@ class HistoricalSimilarityService:
         all_candles = await self._candles.list_range(
             symbol_id, timeframe, limit=_MAX_CANDLES_CONSIDERED
         )
+        if as_of_timestamp is not None:
+            all_candles = [candle for candle in all_candles if candle.timestamp <= as_of_timestamp]
         windows = _rolling_windows(all_candles, window_size)
         if len(windows) < 2:
             return SimilaritySearchResult(
@@ -133,20 +153,47 @@ class HistoricalSimilarityService:
             all_candles[end_index].timestamp: end_index for end_index, _ in candidate_entries
         }
         returns_pct: list[float] = []
+        enriched_matches: list[SimilarityMatch] = []
 
         for match in matches:
             window_end_index = index_by_timestamp[match.timestamp]
             forward_index = window_end_index + forward_bars
             if forward_index >= len(all_candles):
+                enriched_matches.append(match)
                 continue
 
             entry_price = all_candles[window_end_index].close
             exit_price = all_candles[forward_index].close
             if entry_price == 0:
+                enriched_matches.append(match)
                 continue
 
             outcome_return_pct = (exit_price - entry_price) / entry_price * 100
             returns_pct.append(outcome_return_pct)
+            # The path between entry and exit (exclusive of the entry bar
+            # itself) -- how far price moved against a BUY/SELL held over
+            # this same horizon, for the Trade Similarity Engine's
+            # "Average drawdown"/"Average RR" (`summarize_matches_for_direction`).
+            path = all_candles[window_end_index + 1 : forward_index + 1]
+            if not path:
+                enriched_matches.append(match)
+                continue
+            adverse_if_long_pct = max(
+                0.0, (entry_price - min(candle.low for candle in path)) / entry_price * 100
+            )
+            adverse_if_short_pct = max(
+                0.0, (max(candle.high for candle in path) - entry_price) / entry_price * 100
+            )
+            enriched_matches.append(
+                replace(
+                    match,
+                    outcome_return_pct=outcome_return_pct,
+                    adverse_if_long_pct=adverse_if_long_pct,
+                    adverse_if_short_pct=adverse_if_short_pct,
+                )
+            )
+            if not persist_matches:
+                continue
             await self._similarities.add(
                 HistoricalSimilarity(
                     symbol_id=symbol_id,
@@ -166,5 +213,5 @@ class HistoricalSimilarityService:
             with_outcome=len(returns_pct),
         )
         return SimilaritySearchResult(
-            matches=matches, outcome_statistics=compute_outcome_statistics(returns_pct)
+            matches=enriched_matches, outcome_statistics=compute_outcome_statistics(returns_pct)
         )

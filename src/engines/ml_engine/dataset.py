@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from src.core.ml.features import build_feature_vector
 from src.core.ml.labels import LabelThresholds, compute_label
 from src.models.candle import Candle
+from src.utils.statistics import forward_return_pct
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +68,12 @@ def build_dataset(
         if entry_price == 0:
             continue
 
-        forward_return_pct = (exit_price - entry_price) / entry_price * 100
+        return_pct = forward_return_pct(entry_price, exit_price)
         samples.append(
             Sample(
                 features=build_feature_vector(window),
-                forward_return_pct=forward_return_pct,
-                label=compute_label(forward_return_pct, thresholds),
+                forward_return_pct=return_pct,
+                label=compute_label(return_pct, thresholds),
             )
         )
     return Dataset(samples=samples)

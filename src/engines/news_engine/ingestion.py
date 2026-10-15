@@ -24,7 +24,10 @@ from src.engines.news_engine.cleaning import clean_article_text
 from src.engines.news_engine.processing import process_raw_article
 from src.models.news_article import NewsArticle
 from src.repositories.news_article_repository import NewsArticleRepository
-from src.services.news.providers.newsapi_provider import NewsApiProvider
+from src.services.news.providers.newsapi_provider import (
+    REPUTABLE_FINANCIAL_DOMAINS,
+    NewsApiProvider,
+)
 from src.settings import Settings, get_settings
 
 logger = get_logger(__name__)
@@ -79,12 +82,24 @@ class NewsIngestionService:
             [NewsApiProvider(resolved_settings)], category=_DATA_CATEGORY
         )
 
-    async def ingest(self, query: str, *, page_size: int = 20) -> NewsIngestionResult:
+    async def ingest(
+        self,
+        query: str,
+        *,
+        page_size: int = 20,
+        domains: tuple[str, ...] = REPUTABLE_FINANCIAL_DOMAINS,
+    ) -> NewsIngestionResult:
         """Fetch, classify and store news articles matching a query.
 
         Args:
             query: Search query, e.g. "gold OR XAUUSD".
             page_size: Maximum number of articles to request.
+            domains: Restrict results to these publisher domains (NewsAPI's
+                own `domains` filter). Defaults to
+                `REPUTABLE_FINANCIAL_DOMAINS` (Reuters, Bloomberg, FT,
+                WSJ, CNBC, MarketWatch) -- per the "News Intelligence"
+                production requirement's source-quality bar. Pass an
+                empty tuple to search every source NewsAPI aggregates.
 
         Returns:
             A `NewsIngestionResult` summarizing what was fetched and stored.
@@ -95,8 +110,13 @@ class NewsIngestionService:
                 cached (e.g. `NEWSAPI_API_KEY` is not set yet) — never
                 fabricated as empty/fake data.
         """
-        cache_key = build_cache_key(_DATA_CATEGORY.value, f"newsapi:{query}:{page_size}")
-        dataset = await self._fallback_chain.fetch(cache_key, query=query, page_size=page_size)
+        domains_param = ",".join(domains)
+        cache_key = build_cache_key(
+            _DATA_CATEGORY.value, f"newsapi:{query}:{page_size}:{domains_param}"
+        )
+        dataset = await self._fallback_chain.fetch(
+            cache_key, query=query, page_size=page_size, domains=domains_param
+        )
         source_reliability = dataset.metadata.quality.reliability
 
         skipped_incomplete = 0

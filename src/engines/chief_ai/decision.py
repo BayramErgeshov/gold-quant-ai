@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from src.core.agents.confluence import CombinedVote
+from src.engines.chief_ai.trade_quality import TradeQualityResult, compute_trade_quality
 from src.engines.risk_engine.approval import TradeApprovalDecision
 from src.engines.statistics_engine.confidence import ConfidenceInput, compute_overall_confidence
 from src.engines.statistics_engine.probability import ProbabilityEstimate, combine_department_votes
@@ -30,6 +31,8 @@ REQUIRED_REPORTS: tuple[str, ...] = (
     "statistics",
     "risk",
     "execution",
+    "correlation",
+    "order_flow",
 )
 _CONFLICT_MARGIN = 0.1
 # Per AGENT_SYSTEM.md "never trust a single source": a decision made without
@@ -47,7 +50,8 @@ class ChiefAIInput:
 
     Attributes:
         department_votes: Each department's own `CombinedVote` (e.g.
-            "technical", "macro", "news", "historical", "ml").
+            "technical", "macro", "news", "historical", "ml",
+            "correlation", "order_flow").
         reports_present: Which `REQUIRED_REPORTS` were successfully
             produced this cycle (DECISION_ENGINE.md "Required Inputs"). A
             missing report forces WAIT unless it is listed in
@@ -65,6 +69,24 @@ class ChiefAIInput:
             FRED/NewsAPI keys are added) rather than blocking every
             decision indefinitely; still never fabricates the missing
             department's opinion.
+        department_reliability: Each department's measured historical
+            accuracy (`src.engines.learning_engine.department_performance`),
+            keyed by department name. Used as the weight for both the
+            cross-department probability combination and the overall
+            confidence calculation -- "calibrated weights instead of
+            simple averaging" (Trade Quality Engine production
+            requirement) -- and for the Trade Quality Score's reliability
+            component. A department absent here defaults to the neutral
+            weight of 1.0.
+        books_confluence: How much statistically-validated book knowledge
+            (`src.repositories.book_claim_repository`) supports this
+            setup, in [0.0, 1.0]. Defaults to 0.0 -- never fabricated
+            support before any claim has actually been validated.
+        min_trade_quality_score: Minimum Trade Quality Score (0-100)
+            required to BUY/SELL, per the "Trade Quality Engine"
+            production requirement: the score becomes the primary
+            decision metric, not just a displayed number. 0.0 means no
+            additional gate beyond `confidence_threshold`.
     """
 
     department_votes: dict[str, CombinedVote]
@@ -74,6 +96,9 @@ class ChiefAIInput:
     market_regime: str | None = None
     critical_news_imminent: bool = False
     optional_reports: frozenset[str] = frozenset()
+    department_reliability: dict[str, float] = field(default_factory=dict)
+    books_confluence: float = 0.0
+    min_trade_quality_score: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +120,10 @@ class ChiefAIDecision:
             this decision was made with fewer independent sources than
             the platform's full design calls for — flagged, but does not
             by itself force WAIT.
+        trade_quality: The Trade Quality Engine's 0-100 score, risk score
+            and reasoning for this cycle (`src.engines.chief_ai.trade_quality`).
+            Always computed, even for a WAIT decision, so a near-miss
+            setup's quality is still visible.
     """
 
     state: DecisionState
@@ -105,6 +134,9 @@ class ChiefAIDecision:
     supporting_evidence: list[str] = field(default_factory=list)
     opposing_evidence: list[str] = field(default_factory=list)
     reduced_confidence_factors: list[str] = field(default_factory=list)
+    trade_quality: TradeQualityResult = field(
+        default_factory=lambda: TradeQualityResult(score=0.0, risk_score=0.0)
+    )
 
     @property
     def is_reduced_confidence(self) -> bool:
@@ -120,6 +152,49 @@ def _detect_conflict(probability: ProbabilityEstimate) -> bool:
     return abs(probability.bullish_probability - probability.bearish_probability) < (
         _CONFLICT_MARGIN
     )
+
+
+def compute_department_confidence(
+    department_votes: dict[str, CombinedVote],
+    *,
+    reduced_confidence_factors: list[str],
+    department_reliability: dict[str, float] | None = None,
+) -> float:
+    """Compute overall confidence from department votes (DECISION_ENGINE.md).
+
+    Extracted so callers building a `ChiefAIInput.risk_decision` ahead of
+    `evaluate()` (e.g. the Market Update Workflow) can derive the same
+    confidence score the Trade Approval Pipeline gates on, rather than
+    duplicating this calculation (CODING_STANDARDS.md "Never duplicate
+    functionality").
+
+    Args:
+        department_votes: Each department's own `CombinedVote`.
+        reduced_confidence_factors: Non-empty when an optional report was
+            unavailable this cycle; discounts the result identically to
+            `evaluate()`.
+        department_reliability: Each department's measured historical
+            accuracy, keyed by name (see `ChiefAIInput.department_reliability`).
+            A department absent here defaults to the neutral weight of
+            1.0 -- "calibrated weights instead of simple averaging"
+            (Trade Quality Engine production requirement).
+
+    Returns:
+        Overall confidence in [0.0, 100.0].
+    """
+    resolved_reliability = department_reliability or {}
+    confidence_inputs = [
+        ConfidenceInput(
+            name=name,
+            confidence=vote.confidence * 100,
+            historical_reliability=resolved_reliability.get(name, 1.0),
+        )
+        for name, vote in department_votes.items()
+    ]
+    confidence_pct = compute_overall_confidence(confidence_inputs)
+    if reduced_confidence_factors:
+        confidence_pct *= _REDUCED_CONFIDENCE_DISCOUNT
+    return confidence_pct
 
 
 def _pooled_evidence(
@@ -156,14 +231,22 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
     missing = _missing_reports(chief_input.reports_present)
     hard_missing = [name for name in missing if name not in chief_input.optional_reports]
     if hard_missing:
+        empty_probability = ProbabilityEstimate(
+            bullish_probability=0.0, bearish_probability=0.0, neutral_probability=1.0
+        )
         return ChiefAIDecision(
             state="WAIT",
-            probability=ProbabilityEstimate(
-                bullish_probability=0.0, bearish_probability=0.0, neutral_probability=1.0
-            ),
+            probability=empty_probability,
             confidence_pct=0.0,
             uncertainty_factors=[f"missing_report:{name}" for name in hard_missing],
             reasons=["required_report_missing"],
+            trade_quality=compute_trade_quality(
+                probability=empty_probability,
+                confidence_pct=0.0,
+                department_votes=chief_input.department_votes,
+                department_reliability=chief_input.department_reliability,
+                books_confluence=chief_input.books_confluence,
+            ),
         )
     reduced_confidence_factors = [
         f"reduced_confidence:{name}_unavailable"
@@ -171,15 +254,22 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
         if name in chief_input.optional_reports
     ]
 
-    probability = combine_department_votes(chief_input.department_votes)
-    confidence_inputs = [
-        ConfidenceInput(name=name, confidence=vote.confidence * 100)
-        for name, vote in chief_input.department_votes.items()
-    ]
-    confidence_pct = compute_overall_confidence(confidence_inputs)
-    if reduced_confidence_factors:
-        confidence_pct *= _REDUCED_CONFIDENCE_DISCOUNT
+    probability = combine_department_votes(
+        chief_input.department_votes, weights=chief_input.department_reliability or None
+    )
+    confidence_pct = compute_department_confidence(
+        chief_input.department_votes,
+        reduced_confidence_factors=reduced_confidence_factors,
+        department_reliability=chief_input.department_reliability,
+    )
     supporting_evidence, opposing_evidence = _pooled_evidence(chief_input.department_votes)
+    trade_quality = compute_trade_quality(
+        probability=probability,
+        confidence_pct=confidence_pct,
+        department_votes=chief_input.department_votes,
+        department_reliability=chief_input.department_reliability,
+        books_confluence=chief_input.books_confluence,
+    )
 
     uncertainty_factors: list[str] = []
     if chief_input.critical_news_imminent:
@@ -201,6 +291,7 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
             supporting_evidence=supporting_evidence,
             opposing_evidence=opposing_evidence,
             reduced_confidence_factors=reduced_confidence_factors,
+            trade_quality=trade_quality,
         )
 
     if confidence_pct < chief_input.confidence_threshold:
@@ -216,6 +307,27 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
             supporting_evidence=supporting_evidence,
             opposing_evidence=opposing_evidence,
             reduced_confidence_factors=reduced_confidence_factors,
+            trade_quality=trade_quality,
+        )
+
+    # Per the "Trade Quality Engine" production requirement: the score
+    # is the primary decision metric, not merely displayed -- a trade
+    # below this floor is rejected even though confidence alone cleared
+    # `confidence_threshold` above.
+    if trade_quality.score < chief_input.min_trade_quality_score:
+        return ChiefAIDecision(
+            state="WAIT",
+            probability=probability,
+            confidence_pct=confidence_pct,
+            uncertainty_factors=uncertainty_factors,
+            reasons=[
+                f"trade_quality_below_threshold: {trade_quality.score:.1f} < "
+                f"{chief_input.min_trade_quality_score}"
+            ],
+            supporting_evidence=supporting_evidence,
+            opposing_evidence=opposing_evidence,
+            reduced_confidence_factors=reduced_confidence_factors,
+            trade_quality=trade_quality,
         )
 
     if uncertainty_factors:
@@ -228,6 +340,7 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
             supporting_evidence=supporting_evidence,
             opposing_evidence=opposing_evidence,
             reduced_confidence_factors=reduced_confidence_factors,
+            trade_quality=trade_quality,
         )
 
     if probability.bullish_probability > probability.bearish_probability:
@@ -249,4 +362,5 @@ def evaluate(chief_input: ChiefAIInput) -> ChiefAIDecision:
         supporting_evidence=supporting_evidence,
         opposing_evidence=opposing_evidence,
         reduced_confidence_factors=reduced_confidence_factors,
+        trade_quality=trade_quality,
     )

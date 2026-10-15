@@ -129,3 +129,107 @@ def max_drawdown_pct(equity_curve: list[float]) -> float:
             drawdown = (peak - value) / peak * 100
             max_drawdown = max(max_drawdown, drawdown)
     return max_drawdown
+
+
+def average_win_pct(returns_pct: list[float]) -> float:
+    """Average return of winning trades only.
+
+    Args:
+        returns_pct: Realized return per closed trade, in percent.
+
+    Returns:
+        Mean return across trades with a strictly positive return, in
+        percent. 0.0 if there are no winning trades.
+    """
+    wins = [value for value in returns_pct if value > 0]
+    return sum(wins) / len(wins) if wins else 0.0
+
+
+def average_loss_pct(returns_pct: list[float]) -> float:
+    """Average loss magnitude of losing trades only.
+
+    Args:
+        returns_pct: Realized return per closed trade, in percent.
+
+    Returns:
+        Mean loss magnitude across trades with a strictly negative
+        return, in percent, as a positive number (a loss size, not a
+        negative return). 0.0 if there are no losing trades.
+    """
+    losses = [-value for value in returns_pct if value < 0]
+    return sum(losses) / len(losses) if losses else 0.0
+
+
+def max_consecutive_wins(returns_pct: list[float]) -> int:
+    """Longest streak of consecutive winning trades, in chronological order.
+
+    Args:
+        returns_pct: Realized return per closed trade, in percent, in
+            chronological (closing) order.
+
+    Returns:
+        The longest run of strictly positive returns. 0 if there are none.
+    """
+    longest = current = 0
+    for value in returns_pct:
+        current = current + 1 if value > 0 else 0
+        longest = max(longest, current)
+    return longest
+
+
+def max_consecutive_losses(returns_pct: list[float]) -> int:
+    """Longest streak of consecutive losing trades, in chronological order.
+
+    Args:
+        returns_pct: Realized return per closed trade, in percent, in
+            chronological (closing) order.
+
+    Returns:
+        The longest run of strictly negative returns. 0 if there are none.
+    """
+    longest = current = 0
+    for value in returns_pct:
+        current = current + 1 if value < 0 else 0
+        longest = max(longest, current)
+    return longest
+
+
+def calmar_ratio(*, total_return_pct: float, max_drawdown_pct: float, days_covered: float) -> float:
+    """Annualized return divided by max drawdown, over an actual calendar period.
+
+    Unlike `sharpe_ratio`/`sortino_ratio` (which assume evenly-spaced
+    periods), trades are not evenly spaced in time, so annualization here
+    uses the actual number of calendar days the trade sequence spans
+    rather than a fixed periods-per-year assumption.
+
+    Args:
+        total_return_pct: Total realized return over the period, in percent.
+        max_drawdown_pct: The period's maximum drawdown, as a positive percentage.
+        days_covered: Actual calendar days between the first and last trade.
+
+    Returns:
+        The Calmar ratio. 0.0 if `max_drawdown_pct` or `days_covered` is
+        not strictly positive — never a fabricated ratio from an
+        undefined or zero-length period.
+    """
+    if max_drawdown_pct <= 0 or days_covered <= 0:
+        return 0.0
+    annualized_return_pct = total_return_pct * (365.25 / days_covered)
+    return annualized_return_pct / max_drawdown_pct
+
+
+def recovery_factor(*, net_profit: float, max_drawdown: float) -> float:
+    """Net profit divided by max drawdown, in matching units (both $ or both %).
+
+    Args:
+        net_profit: Total realized profit/loss over the period.
+        max_drawdown: The period's maximum drawdown, as a positive
+            magnitude, in the same unit as `net_profit`.
+
+    Returns:
+        The recovery factor. 0.0 if `max_drawdown` is not strictly
+        positive — never a fabricated infinite recovery factor.
+    """
+    if max_drawdown <= 0:
+        return 0.0
+    return net_profit / max_drawdown

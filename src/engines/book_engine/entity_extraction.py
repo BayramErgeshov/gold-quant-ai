@@ -13,20 +13,59 @@ from __future__ import annotations
 import re
 
 _CURRENCIES: tuple[str, ...] = (
-    "USD", "EUR", "GBP", "JPY", "CHF", "CNY", "XAU", "XAG", "AUD", "CAD", "NZD",
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "CHF",
+    "CNY",
+    "XAU",
+    "XAG",
+    "AUD",
+    "CAD",
+    "NZD",
 )
 _INSTITUTIONS: tuple[str, ...] = (
-    "Federal Reserve", "FOMC", "European Central Bank", "ECB", "Bank of Japan", "BOJ",
-    "People's Bank of China", "PBOC", "Bank of England", "BOE", "IMF", "World Bank", "BIS",
-    "CFTC", "SEC", "World Gold Council",
+    "Federal Reserve",
+    "FOMC",
+    "European Central Bank",
+    "ECB",
+    "Bank of Japan",
+    "BOJ",
+    "People's Bank of China",
+    "PBOC",
+    "Bank of England",
+    "BOE",
+    "IMF",
+    "World Bank",
+    "BIS",
+    "CFTC",
+    "SEC",
+    "World Gold Council",
 )
 _COUNTRIES: tuple[str, ...] = (
-    "United States", "China", "Japan", "United Kingdom", "Eurozone", "Germany", "Switzerland",
-    "Australia", "Canada",
+    "United States",
+    "China",
+    "Japan",
+    "United Kingdom",
+    "Eurozone",
+    "Germany",
+    "Switzerland",
+    "Australia",
+    "Canada",
 )
 _INDICATORS: tuple[str, ...] = (
-    "CPI", "PPI", "PCE", "GDP", "PMI", "NFP", "Non-Farm Payrolls", "Retail Sales",
-    "Unemployment Rate", "Interest Rate", "Federal Funds Rate",
+    "CPI",
+    "PPI",
+    "PCE",
+    "GDP",
+    "PMI",
+    "NFP",
+    "Non-Farm Payrolls",
+    "Retail Sales",
+    "Unemployment Rate",
+    "Interest Rate",
+    "Federal Funds Rate",
 )
 
 _CATEGORY_WORD_LISTS: dict[str, tuple[str, ...]] = {

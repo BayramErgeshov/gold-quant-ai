@@ -89,9 +89,7 @@ def compute_position_size(
 
     stop_distance = abs(entry_price - stop_loss_price)
     if stop_distance == 0 or account_equity <= 0:
-        return PositionSizeResult(
-            position_size_units=0.0, risk_amount=0.0, effective_risk_pct=0.0
-        )
+        return PositionSizeResult(position_size_units=0.0, risk_amount=0.0, effective_risk_pct=0.0)
 
     scaling_factor = compute_drawdown_scaling_factor(current_drawdown_pct)
     effective_risk_pct = risk_per_trade_pct * scaling_factor
@@ -100,6 +98,63 @@ def compute_position_size(
 
     if max_position_value is not None and entry_price > 0:
         position_size_units = min(position_size_units, max_position_value / entry_price)
+
+    return PositionSizeResult(
+        position_size_units=position_size_units,
+        risk_amount=risk_amount,
+        effective_risk_pct=effective_risk_pct,
+    )
+
+
+def compute_fixed_lot_position_size(
+    *,
+    fixed_lot_size: float,
+    account_equity: float,
+    entry_price: float,
+    stop_loss_price: float,
+    current_drawdown_pct: float = 0.0,
+) -> PositionSizeResult:
+    """Compute a user-fixed position size that never varies with confidence.
+
+    Per this platform's explicit operating instructions: "Use fixed
+    position sizing chosen by the user... Never increase lot size because
+    of confidence alone." Unlike `compute_position_size` (risk-based:
+    scales with the stop distance and account equity), this always
+    returns `fixed_lot_size` — confidence, setup quality, and stop
+    distance never influence the size itself. It is still scaled *down*
+    (never up) by `compute_drawdown_scaling_factor`, preserving "never
+    increase risk after losses" — a separate safety guarantee this
+    fixed-size mode does not contradict.
+
+    Args:
+        fixed_lot_size: The user-configured position size, in the same
+            unit as `entry_price`/`stop_loss_price` (e.g. ounces for XAUUSD).
+        account_equity: Current account equity, used only to report
+            `effective_risk_pct` for exposure-limit checks — never to
+            resize the position.
+        entry_price: Planned entry price.
+        stop_loss_price: Planned protective stop price.
+        current_drawdown_pct: Current account drawdown, used to scale
+            *down* the fixed size after losses.
+
+    Returns:
+        A `PositionSizeResult` whose `position_size_units` is
+        `fixed_lot_size` scaled only by drawdown protection, with
+        `risk_amount`/`effective_risk_pct` computed informationally from
+        the actual stop distance for the exposure-limit check to consume.
+
+    Raises:
+        ValueError: If `fixed_lot_size` is not positive.
+    """
+    if fixed_lot_size <= 0:
+        raise ValueError("fixed_lot_size must be positive")
+
+    scaling_factor = compute_drawdown_scaling_factor(current_drawdown_pct)
+    position_size_units = fixed_lot_size * scaling_factor
+
+    stop_distance = abs(entry_price - stop_loss_price)
+    risk_amount = position_size_units * stop_distance
+    effective_risk_pct = (risk_amount / account_equity * 100) if account_equity > 0 else 0.0
 
     return PositionSizeResult(
         position_size_units=position_size_units,

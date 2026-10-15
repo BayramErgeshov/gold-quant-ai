@@ -15,9 +15,7 @@ async def test_list_pending_excludes_validated_claims(session: AsyncSession) -> 
     book = await BookRepository(session).add(
         Book(title="Book", author="Author", source_path="book.pdf")
     )
-    chunk = await BookChunkRepository(session).add(
-        BookChunk(book_id=book.id, page=1, text="text")
-    )
+    chunk = await BookChunkRepository(session).add(BookChunk(book_id=book.id, page=1, text="text"))
     repo = BookClaimRepository(session)
     await repo.add(
         BookClaim(book_id=book.id, chunk_id=chunk.id, statement="Pending claim", topic="risk")

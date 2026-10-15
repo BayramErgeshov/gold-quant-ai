@@ -18,26 +18,20 @@ def test_message_hash_differs_for_different_text() -> None:
 
 
 def test_sends_new_content() -> None:
-    decision = should_send_notification(
-        message_hash="abc", last_sent_hash="xyz", priority="medium"
-    )
+    decision = should_send_notification(message_hash="abc", last_sent_hash="xyz", priority="medium")
 
     assert decision.should_send is True
     assert decision.reason == "new_content"
 
 
 def test_sends_first_message_with_no_prior_hash() -> None:
-    decision = should_send_notification(
-        message_hash="abc", last_sent_hash=None, priority="low"
-    )
+    decision = should_send_notification(message_hash="abc", last_sent_hash=None, priority="low")
 
     assert decision.should_send is True
 
 
 def test_suppresses_duplicate_message() -> None:
-    decision = should_send_notification(
-        message_hash="abc", last_sent_hash="abc", priority="medium"
-    )
+    decision = should_send_notification(message_hash="abc", last_sent_hash="abc", priority="medium")
 
     assert decision.should_send is False
     assert decision.reason == "duplicate_of_last_message"

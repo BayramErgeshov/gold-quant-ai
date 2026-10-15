@@ -122,9 +122,29 @@ def combine_agent_reports(
     )
 
 
-def _vote(
-    reports: list[AgentReport], weights: dict[str, float]
-) -> tuple[float, float, float]:
+def vote_bias(vote: CombinedVote) -> Bias:
+    """Derive a `CombinedVote`'s own directional bias from its probabilities.
+
+    Shared so every caller that needs "which way did this vote lean"
+    (e.g. journal snapshotting, the Trade Quality Engine) agrees on the
+    same tie-breaking rule instead of re-deriving it independently
+    (CODING_STANDARDS.md "Never duplicate functionality").
+
+    Args:
+        vote: The combined vote to classify.
+
+    Returns:
+        "bullish" if strictly more bullish than bearish, "bearish" if the
+        reverse, "neutral" otherwise (including an exact tie).
+    """
+    if vote.bullish_probability > vote.bearish_probability:
+        return "bullish"
+    if vote.bearish_probability > vote.bullish_probability:
+        return "bearish"
+    return "neutral"
+
+
+def _vote(reports: list[AgentReport], weights: dict[str, float]) -> tuple[float, float, float]:
     """Confidence-and-weight-adjusted vote share for each bias."""
     bias_weight: dict[Bias, float] = {"bullish": 0.0, "bearish": 0.0, "neutral": 0.0}
     total_weight = 0.0

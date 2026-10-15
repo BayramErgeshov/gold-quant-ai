@@ -22,6 +22,5 @@ def test_repr_includes_title_and_status() -> None:
     )
 
     assert repr(proposal) == (
-        "ImprovementProposal(title='Widen stops in high volatility regimes', "
-        "status='pending')"
+        "ImprovementProposal(title='Widen stops in high volatility regimes', status='pending')"
     )

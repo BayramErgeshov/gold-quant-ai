@@ -35,9 +35,7 @@ class LabelThresholds:
     strong_move_pct: float = 1.0
 
 
-def compute_label(
-    forward_return_pct: float, thresholds: LabelThresholds | None = None
-) -> str:
+def compute_label(forward_return_pct: float, thresholds: LabelThresholds | None = None) -> str:
     """Classify a forward return into a directional label.
 
     Args:

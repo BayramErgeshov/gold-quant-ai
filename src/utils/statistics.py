@@ -41,6 +41,22 @@ def linear_regression_slope_pct(values: list[float]) -> float:
     return (slope / average) * 100
 
 
+def forward_return_pct(entry_price: float, exit_price: float) -> float:
+    """Percentage price change from an entry to a later exit price.
+
+    Args:
+        entry_price: Price at the start of the window.
+        exit_price: Price at the end of the window.
+
+    Returns:
+        `(exit_price - entry_price) / entry_price * 100`. 0.0 if
+        `entry_price` is 0, rather than raising a division error.
+    """
+    if entry_price == 0:
+        return 0.0
+    return (exit_price - entry_price) / entry_price * 100
+
+
 def log_return_stddev_pct(values: list[float]) -> float:
     """Sample standard deviation of period-over-period log returns, as a percentage.
 

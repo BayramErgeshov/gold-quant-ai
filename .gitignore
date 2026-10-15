@@ -33,6 +33,13 @@ htmlcov/
 # negation below it from ever being evaluated.
 data/*
 !data/.gitkeep
+# Runtime logs/PID/flag files written directly into logs/ by the
+# launcher scripts (bot_on.ps1/start_all.ps1/health_check.py) -- never
+# part of the repo. Nested subdirectories keep their own `.gitkeep`
+# rule below.
+logs/*.log
+logs/*.pid
+logs/*.flag
 logs/*/*
 !logs/*/.gitkeep
 backups/*
@@ -45,8 +52,13 @@ vector_db/*
 !vector_db/.gitkeep
 datasets/*/*
 !datasets/*/.gitkeep
-books/uploaded/*
-books/processed/*
+# User-uploaded books (PDF/TXT) and every derived artifact (chunks,
+# OCR output, extracted metadata/knowledge graph) are copyrighted
+# third-party content -- never committed, even to a private repo. Only
+# the Book Engine's own *code* that reads this directory belongs here.
+books/*.pdf
+books/*.txt
+books/*/*
 !books/*/.gitkeep
 reports/*/*
 !reports/*/.gitkeep

@@ -60,7 +60,7 @@ def _ocr_page(pdf_path: Path, page_number: int) -> str:  # pragma: no cover
     images = convert_from_path(str(pdf_path), first_page=page_number, last_page=page_number)
     if not images:
         return ""
-    return str(pytesseract.image_to_string(images[0])).strip()
+    return str(pytesseract.image_to_string(images[0], lang="eng+rus")).strip()
 
 
 def extract_pages(pdf_path: Path) -> list[ExtractedPage]:
@@ -91,9 +91,7 @@ def extract_pages(pdf_path: Path) -> list[ExtractedPage]:
                 text = _ocr_page(pdf_path, index)
                 used_ocr = True
             else:
-                logger.warning(
-                    "ocr_unavailable_skipping_page", page=index, pdf_path=str(pdf_path)
-                )
+                logger.warning("ocr_unavailable_skipping_page", page=index, pdf_path=str(pdf_path))
 
         pages.append(ExtractedPage(page_number=index, text=text, used_ocr=used_ocr))
 

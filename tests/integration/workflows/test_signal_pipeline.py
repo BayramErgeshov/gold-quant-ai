@@ -11,6 +11,7 @@ from src.core.execution.mt5_client import (
     AccountInfo,
     MT5Client,
     OpenPosition,
+    OrderBookSnapshot,
     OrderRequest,
     OrderResult,
     SymbolTick,
@@ -68,6 +69,9 @@ class _FakeMT5Client(MT5Client):
 
     async def get_symbol_tick(self, symbol: str) -> SymbolTick:
         raise NotImplementedError
+
+    async def get_order_book(self, symbol: str) -> OrderBookSnapshot | None:
+        return None
 
     async def get_open_positions(
         self, *, symbol: str | None = None, magic_number: int | None = None
@@ -269,6 +273,119 @@ async def test_successful_buy_journals_open_trade_and_sends_telegram_preview(
     assert stored.status == "open"
 
 
+async def test_successful_buy_persists_reasons_and_scenario_plan(
+    session: AsyncSession,
+) -> None:
+    # Per the "Strategy Explanation" production requirement: Reasons and
+    # Expected Scenario must survive beyond the one-shot Telegram preview.
+    symbol = await _make_symbol(session)
+    mt5 = _FakeMT5Client(
+        place_order_result=OrderResult(success=True, broker_ticket="9010", filled_price=2000.0)
+    )
+    workflow = SignalWorkflow(
+        trade_repository=TradeRepository(session),
+        mt5_client=mt5,
+        telegram_notifier=_FakeTelegramNotifier(),
+    )
+    workflow_input = SignalWorkflowInput(
+        symbol_id=symbol.id,
+        market_symbol_name="XAUUSD",
+        entry_price=2000.0,
+        stop_loss=1990.0,
+        take_profit=2020.0,
+        position_size=PositionSizeResult(
+            position_size_units=1.0, risk_amount=100.0, effective_risk_pct=1.0
+        ),
+        execution_request=_approved_execution_request(market_symbol_name="XAUUSD"),
+        strategy_name="xauusd_h1_trend",
+        strategy_version="1.0.0",
+        telegram_chat_id="chat-1",
+    )
+
+    result = await workflow.run(_decision("BUY"), workflow_input)
+
+    assert result.trade is not None
+    assert result.trade.reasons == ["bullish_probability_exceeds_bearish"]
+    assert result.trade.scenario_plan is not None
+    assert "continues higher" in result.trade.scenario_plan["primary_scenario"]
+    assert result.trade.scenario_plan["alternative_scenario"]
+    assert result.trade.scenario_plan["invalidation"]
+
+
+async def test_telegram_message_includes_target_and_department_reason_tags(
+    session: AsyncSession,
+) -> None:
+    symbol = await _make_symbol(session)
+    mt5 = _FakeMT5Client(
+        place_order_result=OrderResult(success=True, broker_ticket="9003", filled_price=2000.0)
+    )
+    telegram = _FakeTelegramNotifier()
+    workflow = SignalWorkflow(
+        trade_repository=TradeRepository(session), mt5_client=mt5, telegram_notifier=telegram
+    )
+    workflow_input = SignalWorkflowInput(
+        symbol_id=symbol.id,
+        market_symbol_name="XAUUSD",
+        entry_price=2000.0,
+        stop_loss=1990.0,
+        take_profit=2030.0,
+        position_size=PositionSizeResult(
+            position_size_units=1.0, risk_amount=100.0, effective_risk_pct=1.0
+        ),
+        execution_request=_approved_execution_request(market_symbol_name="XAUUSD"),
+        strategy_name="xauusd_h1_trend",
+        strategy_version="1.0.0",
+        telegram_chat_id="chat-1",
+        department_votes={
+            "technical": {"bias": "bullish", "confidence": 0.8},
+            "correlation": {"bias": "bullish", "confidence": 0.6},
+            "order_flow": {"bias": "bearish", "confidence": 0.3},
+        },
+        market_regime="bull_trend",
+    )
+
+    await workflow.run(_decision("BUY"), workflow_input)
+
+    message = telegram.sent_messages[0][1]
+    assert "🎯 TP:\n2030.00" in message
+    assert "✅ Технический анализ" in message
+    assert "✅ Корреляция" in message
+    assert "❌ Order Flow" in message
+
+
+async def test_telegram_message_omits_target_and_reason_block_without_a_target(
+    session: AsyncSession,
+) -> None:
+    symbol = await _make_symbol(session)
+    mt5 = _FakeMT5Client(
+        place_order_result=OrderResult(success=True, broker_ticket="9004", filled_price=2000.0)
+    )
+    telegram = _FakeTelegramNotifier()
+    workflow = SignalWorkflow(
+        trade_repository=TradeRepository(session), mt5_client=mt5, telegram_notifier=telegram
+    )
+    workflow_input = SignalWorkflowInput(
+        symbol_id=symbol.id,
+        market_symbol_name="XAUUSD",
+        entry_price=2000.0,
+        stop_loss=1990.0,
+        take_profit=None,
+        position_size=PositionSizeResult(
+            position_size_units=1.0, risk_amount=100.0, effective_risk_pct=1.0
+        ),
+        execution_request=_approved_execution_request(market_symbol_name="XAUUSD"),
+        strategy_name="xauusd_h1_trend",
+        strategy_version="1.0.0",
+        telegram_chat_id="chat-1",
+    )
+
+    await workflow.run(_decision("BUY"), workflow_input)
+
+    message = telegram.sent_messages[0][1]
+    assert "🎯" not in message
+    assert "📌 Причины:" not in message
+
+
 async def test_sell_decision_uses_sell_direction(session: AsyncSession) -> None:
     symbol = await _make_symbol(session)
     mt5 = _FakeMT5Client(
@@ -299,3 +416,37 @@ async def test_sell_decision_uses_sell_direction(session: AsyncSession) -> None:
     assert result.trade.direction == "sell"
     assert mt5.last_order_request is not None
     assert mt5.last_order_request.order_type == "sell"
+
+
+async def test_journals_market_regime_and_confidence_at_signal_time(
+    session: AsyncSession,
+) -> None:
+    symbol = await _make_symbol(session)
+    mt5 = _FakeMT5Client(
+        place_order_result=OrderResult(success=True, broker_ticket="9005", filled_price=2000.0)
+    )
+    telegram = _FakeTelegramNotifier()
+    workflow = SignalWorkflow(
+        trade_repository=TradeRepository(session), mt5_client=mt5, telegram_notifier=telegram
+    )
+    workflow_input = SignalWorkflowInput(
+        symbol_id=symbol.id,
+        market_symbol_name="XAUUSD",
+        entry_price=2000.0,
+        stop_loss=1990.0,
+        take_profit=2030.0,
+        position_size=PositionSizeResult(
+            position_size_units=1.0, risk_amount=100.0, effective_risk_pct=1.0
+        ),
+        execution_request=_approved_execution_request(market_symbol_name="XAUUSD"),
+        strategy_name="xauusd_h1_trend",
+        strategy_version="1.0.0",
+        telegram_chat_id="chat-1",
+        market_regime="bull_trend",
+    )
+
+    result = await workflow.run(_decision("BUY"), workflow_input)
+
+    assert result.trade is not None
+    assert result.trade.market_regime == "bull_trend"
+    assert result.trade.confidence_pct == 82.0

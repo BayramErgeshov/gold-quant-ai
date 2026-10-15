@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import logging.config
+import sys
 from typing import Any, cast
 
 import structlog
@@ -62,6 +63,20 @@ def configure_logging(settings: Settings) -> None:
     global _configured
     if _configured:
         return
+
+    # Windows consoles default to the system's legacy codepage (e.g.
+    # cp1251), not UTF-8. A log event containing any character outside
+    # that codepage (Cyrillic paths, Telegram message punctuation, etc.)
+    # would otherwise raise `UnicodeEncodeError` *from inside the logging
+    # call itself* -- an institutional audit finding: this crashed the
+    # live trading loop outright (an unhandled exception during
+    # `logger.exception()` propagated out of `run_once()`, killing
+    # `run_forever()`) rather than merely mangling one log line. A
+    # logging call must never be able to crash the process it's meant to
+    # be observing.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
 
     _ensure_log_directories_exist()
     logging.config.dictConfig(_build_dict_config(settings))

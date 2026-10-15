@@ -7,7 +7,11 @@
 confidence:
   reject_below: 40           # 0-40 -> Reject (RISK_ENGINE.md confidence levels)
   observation_only_below: 61 # 41-60 -> Observation only, no execution
-  setup_requires_confirmation_below: 76  # 61-75 -> Requires stronger confirmation
+  # Live Demo Trading Mode (production requirements update): Chief AI may
+  # automatically execute on the MT5 demo account once overall confidence
+  # reaches 70% -- this is also `MarketScanConfig.confidence_threshold`,
+  # the live loop's actual execution gate (scripts/run_live_loop.py).
+  setup_requires_confirmation_below: 70
   high_quality_below: 86      # 76-85 -> High quality, execution allowed
   institutional_grade: 86     # 86-100 -> Institutional grade
 
@@ -16,6 +20,11 @@ quality:
   maximum_risk_grade: BB
   minimum_historical_similarity: 0.55
   minimum_data_quality_grade: BBB
+  # Trade Quality Engine production requirement: the 0-100 Trade Quality
+  # Score becomes a real execution gate, not just a displayed number --
+  # a trade below this score is not opened even if confidence alone
+  # cleared its own threshold.
+  minimum_trade_quality_score: 60.0
 
 exposure:
   max_total_exposure_pct: 5.0
@@ -53,16 +62,18 @@ news_protection:
   minutes_before_high_impact_no_new_entries: 30
   minutes_after_high_impact_no_new_entries: 15
 
-correlation_watchlist:
-  - XAGUSD
-  - DXY
-  - US10Y
-  - VIX
-  - SPX500
-  - USOIL
-  - COPPER
-
 trade_management:
   break_even_requires_structure_confirmation: true
   trailing_methods_allowed: [structure, atr, swing, liquidity, vwap, order_blocks, adaptive_hybrid]
   partial_close_options_pct: [0, 25, 33, 50, 75]
+
+# "Before Market Close" production requirement: 30 minutes before the
+# daily session close, every open position gets a Telegram report
+# (recommendation, confidence, reasons, keep/close). `weekly_close_weekday`
+# additionally triggers the weekend gap risk note on that day's report.
+# These times are broker-dependent (varies by server) and must be
+# confirmed against the connected terminal, not assumed universal.
+session_schedule:
+  daily_close_utc: "21:00"
+  weekly_close_weekday: friday
+  pre_close_warning_minutes: 30

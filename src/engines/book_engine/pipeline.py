@@ -3,19 +3,21 @@
 Runs the full BOOK_RAG.md pipeline for a single document:
 
     Import -> OCR if needed -> Language Detection -> Cleaning -> Chunking ->
-    Embedding -> Topic Classification -> Entity Recognition ->
-    Knowledge Graph Update -> Qdrant Storage -> Validation Queue
+    Embedding -> Topic Classification -> Entity Recognition -> Claim
+    Extraction -> Knowledge Graph Update -> Qdrant Storage -> Validation Queue
 
-Claim extraction/validation is intentionally out of scope for automatic
-ingestion: BOOK_RAG.md requires every claim to pass historical validation
-before becoming "production knowledge", which needs the Historical
-Research Engine (a later roadmap phase). This pipeline persists chunks and
-concepts only; claims are added explicitly via `BookClaimRepository` once
-that validation capability exists.
+Per the Institutional Knowledge Research System spec: "Every extracted
+hypothesis auto-enters the Research Engine." Claims are extracted
+automatically here (`claim_extraction.extract_claims`) and persisted as
+`BookClaim(validation_status="pending")` — BOOK_RAG.md's own rule that
+"No claim becomes production knowledge automatically" still holds: only
+`claim_validation.ClaimValidationService`, run separately against real
+price history, ever moves a claim out of "pending".
 """
 
 from __future__ import annotations
 
+import uuid
 from itertools import combinations
 from pathlib import Path
 
@@ -26,13 +28,19 @@ from src.common.logging import get_logger
 from src.core.embeddings.provider import EmbeddingProvider
 from src.database.qdrant.collections import ensure_collection_for_dimension
 from src.engines.book_engine.chunking import chunk_page_text
+from src.engines.book_engine.claim_extraction import extract_claims
 from src.engines.book_engine.cleaning import clean_text
+from src.engines.book_engine.document_extraction import (
+    extract_document_metadata,
+    extract_document_pages,
+)
 from src.engines.book_engine.entity_extraction import extract_entities
 from src.engines.book_engine.language_detection import detect_language
-from src.engines.book_engine.text_extraction import extract_pages
 from src.engines.book_engine.topic_classification import classify_topics
 from src.models.book import Book, BookChunk
+from src.models.book_claim import BookClaim
 from src.repositories.book_chunk_repository import BookChunkRepository
+from src.repositories.book_claim_repository import BookClaimRepository
 from src.repositories.book_repository import BookRepository
 from src.repositories.concept_repository import ConceptRelationshipRepository, ConceptRepository
 
@@ -51,6 +59,7 @@ class BookIngestionPipeline:
         *,
         book_repository: BookRepository,
         chunk_repository: BookChunkRepository,
+        claim_repository: BookClaimRepository,
         concept_repository: ConceptRepository,
         concept_relationship_repository: ConceptRelationshipRepository,
         embedding_provider: EmbeddingProvider,
@@ -61,6 +70,7 @@ class BookIngestionPipeline:
         Args:
             book_repository: Persists `Book` rows.
             chunk_repository: Persists `BookChunk` rows.
+            claim_repository: Persists extracted `BookClaim` rows.
             concept_repository: Persists knowledge graph concept nodes.
             concept_relationship_repository: Persists knowledge graph edges.
             embedding_provider: Active embedding backend (BOOK_RAG.md /
@@ -69,6 +79,7 @@ class BookIngestionPipeline:
         """
         self._books = book_repository
         self._chunks = chunk_repository
+        self._claims = claim_repository
         self._concepts = concept_repository
         self._concept_relationships = concept_relationship_repository
         self._embedding_provider = embedding_provider
@@ -76,19 +87,26 @@ class BookIngestionPipeline:
 
     async def ingest(
         self,
-        pdf_path: Path,
+        document_path: Path,
         *,
-        title: str,
-        author: str,
+        title: str | None = None,
+        author: str | None = None,
         edition: str | None = None,
         publisher: str | None = None,
     ) -> Book:
-        """Ingest a single PDF book end-to-end.
+        """Ingest a single book/document end-to-end.
 
         Args:
-            pdf_path: Path to the PDF file (typically under `books/uploaded/`).
-            title: Book title.
-            author: Author name(s).
+            document_path: Path to a .pdf/.epub/.docx/.txt file (typically
+                under `books/uploaded/`).
+            title: Book title. If omitted (the `/books` folder watcher's
+                automatic case, per the Institutional Knowledge Research
+                System spec: "automatically re-analyze every new book
+                without requiring user interaction"), recovered from the
+                document's own embedded metadata, falling back to the
+                file's stem — never a fabricated title.
+            author: Author name(s). If omitted, recovered the same way,
+                falling back to "unknown".
             edition: Edition string, if known.
             publisher: Publisher name, if known.
 
@@ -98,16 +116,21 @@ class BookIngestionPipeline:
             (BOOK_RAG.md: "Whenever a new book arrives... Do not rebuild
             the database").
         """
-        existing = await self._books.get_by_source_path(str(pdf_path))
+        existing = await self._books.get_by_source_path(str(document_path))
         if existing is not None:
-            logger.info("book_already_ingested", source_path=str(pdf_path))
+            logger.info("book_already_ingested", source_path=str(document_path))
             return existing
+
+        if title is None or author is None:
+            recovered = extract_document_metadata(document_path, fallback_title=document_path.stem)
+            title = title or recovered.title
+            author = author or recovered.author
 
         await ensure_collection_for_dimension(
             self._qdrant, BOOKS_COLLECTION_NAME, dimension=self._embedding_provider.dimension
         )
 
-        pages = extract_pages(pdf_path)
+        pages = extract_document_pages(document_path)
         cleaned_pages = [(page.page_number, clean_text(page.text)) for page in pages]
         language_sample = " ".join(text for _, text in cleaned_pages[:3])
 
@@ -118,7 +141,7 @@ class BookIngestionPipeline:
                 edition=edition,
                 publisher=publisher,
                 language=detect_language(language_sample),
-                source_path=str(pdf_path),
+                source_path=str(document_path),
                 pages=len(pages),
             )
         )
@@ -130,7 +153,7 @@ class BookIngestionPipeline:
             for chunk in chunk_page_text(text, page=page_number)
         ]
         if not text_chunks:
-            logger.warning("book_produced_no_chunks", source_path=str(pdf_path))
+            logger.warning("book_produced_no_chunks", source_path=str(document_path))
             return book
 
         embeddings = await self._embedding_provider.embed([chunk.text for chunk in text_chunks])
@@ -168,16 +191,32 @@ class BookIngestionPipeline:
             )
 
             await self._update_knowledge_graph(topics)
+            await self._extract_claims(book.id, stored_chunk.id, chunk.text, primary_topic)
 
         await self._qdrant.upsert(collection_name=BOOKS_COLLECTION_NAME, points=points)
 
         logger.info(
             "book_ingested",
-            source_path=str(pdf_path),
+            source_path=str(document_path),
             chunk_count=len(text_chunks),
             book_id=str(book.id),
         )
         return book
+
+    async def _extract_claims(
+        self, book_id: uuid.UUID, chunk_id: uuid.UUID, text: str, topic: str | None
+    ) -> None:
+        """Extract and persist candidate claims from one chunk's text.
+
+        Every claim starts `validation_status="pending"` — extraction
+        only identifies candidate checkable statements; it never judges
+        whether they are true (BOOK_RAG.md: "Never blindly trust any
+        author"). See `claim_validation.ClaimValidationService`.
+        """
+        for statement in extract_claims(text):
+            await self._claims.add(
+                BookClaim(book_id=book_id, chunk_id=chunk_id, statement=statement, topic=topic)
+            )
 
     async def _update_knowledge_graph(self, topics: list[str]) -> None:
         """Register co-occurring topics as linked concepts (BOOK_RAG.md Knowledge Graph)."""

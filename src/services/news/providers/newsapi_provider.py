@@ -21,6 +21,23 @@ from src.settings import Settings, get_settings
 _BASE_URL = "https://newsapi.org/v2/everything"
 _TIMEOUT_SECONDS = 10.0
 
+# Per the "News Intelligence" production requirement: reputable financial
+# outlets to prioritize. NewsAPI (Tier 2, free-tier "Developer" plan)
+# aggregates these as sources rather than providing a direct enterprise
+# feed -- its own `domains` query parameter restricts results to exactly
+# these publishers, honestly within what this platform's current
+# provider contract actually offers (no fabricated direct Reuters/
+# Bloomberg terminal integration, which would require a paid contract
+# this platform does not have).
+REPUTABLE_FINANCIAL_DOMAINS: tuple[str, ...] = (
+    "reuters.com",
+    "bloomberg.com",
+    "ft.com",
+    "wsj.com",
+    "cnbc.com",
+    "marketwatch.com",
+)
+
 
 class NewsApiProvider(DataProvider[list[dict[str, Any]]]):
     """Fetches news articles matching a query from NewsAPI.org."""
@@ -61,6 +78,10 @@ class NewsApiProvider(DataProvider[list[dict[str, Any]]]):
         Args:
             query: Search query, e.g. "gold OR XAUUSD".
             page_size: Maximum number of articles to return (default 20).
+            domains: Optional comma-separated domain allowlist (NewsAPI's
+                own `domains` query parameter), e.g.
+                `",".join(REPUTABLE_FINANCIAL_DOMAINS)`, restricting
+                results to specific reputable publishers.
 
         Returns:
             A list of article dicts as returned by NewsAPI.
@@ -73,8 +94,16 @@ class NewsApiProvider(DataProvider[list[dict[str, Any]]]):
         if not isinstance(query, str):
             raise ProviderError("fetch() requires a 'query' string argument")
         page_size = kwargs.get("page_size", 20)
+        domains = kwargs.get("domains")
 
-        params = {"q": query, "pageSize": page_size, "language": "en", "sortBy": "publishedAt"}
+        params: dict[str, Any] = {
+            "q": query,
+            "pageSize": page_size,
+            "language": "en",
+            "sortBy": "publishedAt",
+        }
+        if isinstance(domains, str) and domains:
+            params["domains"] = domains
 
         try:
             response = await self._request(params)

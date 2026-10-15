@@ -58,3 +58,30 @@ class NewsArticleRepository(BaseRepository[NewsArticle]):
 
         result = await self.session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_high_importance(
+        self, *, min_importance: float = 0.7, limit: int = 100
+    ) -> list[NewsArticle]:
+        """Fetch high-importance articles, most recent first.
+
+        Per the "Market Replay Mode" production requirement: "Allow
+        replay of Major News Events (CPI/NFP/FOMC)" -- this surfaces
+        candidate dates for the user to pick a replay window around,
+        using this platform's own already-computed importance score
+        rather than a hardcoded event list.
+
+        Args:
+            min_importance: Minimum `importance_score` to include.
+            limit: Maximum number of articles to return.
+
+        Returns:
+            Matching `NewsArticle` rows ordered by `published_at` descending.
+        """
+        statement = (
+            select(NewsArticle)
+            .where(NewsArticle.importance_score >= min_importance)
+            .order_by(NewsArticle.published_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())

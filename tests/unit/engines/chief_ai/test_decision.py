@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from src.core.agents.confluence import CombinedVote
@@ -147,6 +149,32 @@ def test_buys_when_bullish_probability_dominates() -> None:
     assert "opposing_factor" in decision.opposing_evidence
 
 
+def test_waits_when_trade_quality_is_below_threshold_even_with_high_confidence() -> None:
+    # Per the "Trade Quality Engine" production requirement: the score is
+    # the primary decision metric -- the same evidence that clears BUY
+    # above must be rejected once `min_trade_quality_score` exceeds its
+    # own computed score.
+    chief_input = ChiefAIInput(
+        department_votes={
+            "technical": _vote(0.9, 0.05, 0.05, confidence=0.9),
+            "macro": _vote(0.85, 0.1, 0.05, confidence=0.8),
+        },
+        reports_present=_all_reports_present(),
+        risk_decision=_approved_risk(),
+        confidence_threshold=50.0,
+        market_regime="bull_trend",
+    )
+    baseline = evaluate(chief_input)
+    assert baseline.state == "BUY"
+
+    gated = evaluate(
+        dataclasses.replace(chief_input, min_trade_quality_score=baseline.trade_quality.score + 1)
+    )
+
+    assert gated.state == "WAIT"
+    assert any("trade_quality_below_threshold" in reason for reason in gated.reasons)
+
+
 def test_sells_when_bearish_probability_dominates() -> None:
     decision = evaluate(
         ChiefAIInput(
@@ -268,3 +296,77 @@ def test_is_reduced_confidence_is_false_when_nothing_missing() -> None:
 
     assert decision.is_reduced_confidence is False
     assert decision.reduced_confidence_factors == []
+
+
+def test_trade_quality_is_always_present_even_when_a_required_report_is_missing() -> None:
+    reports = _all_reports_present()
+    reports["ml"] = False
+
+    decision = evaluate(
+        ChiefAIInput(
+            department_votes={"technical": _vote(0.8, 0.1, 0.1, confidence=0.9)},
+            reports_present=reports,
+            risk_decision=_approved_risk(),
+            market_regime="bull_trend",
+        )
+    )
+
+    assert decision.state == "WAIT"
+    assert decision.trade_quality is not None
+    assert 0.0 <= decision.trade_quality.score <= 100.0
+
+
+def test_calibrated_department_reliability_changes_the_combined_probability() -> None:
+    votes = {
+        "technical": _vote(0.9, 0.05, 0.05, confidence=0.9),
+        "macro": _vote(0.1, 0.85, 0.05, confidence=0.9),
+    }
+
+    unweighted = evaluate(
+        ChiefAIInput(
+            department_votes=votes,
+            reports_present=_all_reports_present(),
+            risk_decision=_approved_risk(),
+            confidence_threshold=10.0,
+            market_regime="bull_trend",
+        )
+    )
+    # Per the "Trade Quality Engine" production requirement: "Chief AI
+    # must combine these using calibrated weights instead of simple
+    # averaging." Trusting "technical" far more than "macro" should tip
+    # the combined vote toward "technical"'s own (bullish) direction.
+    calibrated = evaluate(
+        ChiefAIInput(
+            department_votes=votes,
+            reports_present=_all_reports_present(),
+            risk_decision=_approved_risk(),
+            confidence_threshold=10.0,
+            market_regime="bull_trend",
+            department_reliability={"technical": 0.95, "macro": 0.1},
+        )
+    )
+
+    assert unweighted.state == "WAIT"  # roughly balanced, evenly weighted -- a detected conflict
+    assert calibrated.state == "BUY"
+    assert calibrated.probability.bullish_probability > unweighted.probability.bullish_probability
+
+
+def test_trade_quality_score_reflects_confluence_and_reliability_on_a_buy() -> None:
+    decision = evaluate(
+        ChiefAIInput(
+            department_votes={
+                "technical": _vote(0.9, 0.05, 0.05, confidence=0.9),
+                "macro": _vote(0.85, 0.1, 0.05, confidence=0.8),
+            },
+            reports_present=_all_reports_present(),
+            risk_decision=_approved_risk(),
+            confidence_threshold=50.0,
+            market_regime="bull_trend",
+            department_reliability={"technical": 0.9, "macro": 0.9},
+        )
+    )
+
+    assert decision.state == "BUY"
+    assert decision.trade_quality.score > 50.0
+    assert decision.trade_quality.risk_score > 0.0
+    assert decision.trade_quality.reasoning

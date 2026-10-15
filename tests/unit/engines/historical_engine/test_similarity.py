@@ -9,9 +9,11 @@ import pytest
 from src.engines.historical_engine.regime_detection import RegimeFeatures
 from src.engines.historical_engine.similarity import (
     FeatureWeights,
+    SimilarityMatch,
     compute_outcome_statistics,
     compute_similarity,
     find_similar_windows,
+    summarize_matches_for_direction,
 )
 
 pytestmark = pytest.mark.unit
@@ -45,9 +47,7 @@ def test_compute_similarity_respects_weights() -> None:
     query = _features(trend=0.0, volatility=0.0, range_width=0.0)
     candidate = _features(trend=1.0, volatility=0.0, range_width=0.0)
 
-    ignoring_trend = compute_similarity(
-        query, candidate, weights=FeatureWeights(trend_weight=0.0)
-    )
+    ignoring_trend = compute_similarity(query, candidate, weights=FeatureWeights(trend_weight=0.0))
     weighting_trend = compute_similarity(
         query, candidate, weights=FeatureWeights(trend_weight=10.0)
     )
@@ -97,3 +97,88 @@ def test_compute_outcome_statistics_computes_expected_values() -> None:
     assert stats.average_return_pct == pytest.approx(0.5)
     assert stats.max_return_pct == 3.0
     assert stats.min_return_pct == -2.0
+
+
+def _match(
+    *, outcome: float | None, adverse_long: float | None = None, adverse_short: float | None = None
+) -> SimilarityMatch:
+    return SimilarityMatch(
+        timestamp=_BASE_TIME,
+        similarity_score=0.9,
+        features=_features(),
+        outcome_return_pct=outcome,
+        adverse_if_long_pct=adverse_long,
+        adverse_if_short_pct=adverse_short,
+    )
+
+
+def test_summarize_matches_for_direction_excludes_matches_without_a_measured_outcome() -> None:
+    matches = [_match(outcome=None), _match(outcome=1.0, adverse_long=0.5, adverse_short=0.1)]
+
+    stats = summarize_matches_for_direction(matches, "buy", forward_bars=10, timeframe="M15")
+
+    assert stats.found_count == 1
+
+
+def test_summarize_matches_for_direction_counts_profitable_and_failed_for_buy() -> None:
+    matches = [
+        _match(outcome=2.0, adverse_long=0.5, adverse_short=1.0),
+        _match(outcome=-1.0, adverse_long=1.5, adverse_short=0.2),
+        _match(outcome=0.0, adverse_long=0.3, adverse_short=0.3),
+    ]
+
+    stats = summarize_matches_for_direction(matches, "buy", forward_bars=10, timeframe="M15")
+
+    assert stats.found_count == 3
+    assert stats.profitable_count == 1
+    assert stats.failed_count == 2
+    assert stats.win_rate_pct == pytest.approx(100 / 3)
+
+
+def test_summarize_matches_for_direction_flips_favorability_for_sell() -> None:
+    matches = [
+        _match(outcome=2.0, adverse_long=0.5, adverse_short=1.0),
+        _match(outcome=-1.0, adverse_long=1.5, adverse_short=0.2),
+    ]
+
+    stats = summarize_matches_for_direction(matches, "sell", forward_bars=10, timeframe="M15")
+
+    # A -1.0% raw return favors a SELL (price fell); the +2.0% one does not.
+    assert stats.profitable_count == 1
+    assert stats.failed_count == 1
+
+
+def test_summarize_matches_for_direction_computes_average_rr_and_drawdown() -> None:
+    matches = [
+        # Favorable move +2.0%, adverse (against BUY) 0.5% -> RR = 4.0.
+        _match(outcome=2.0, adverse_long=0.5, adverse_short=1.0),
+        # Favorable move +4.0%, adverse (against BUY) 2.0% -> RR = 2.0.
+        _match(outcome=4.0, adverse_long=2.0, adverse_short=0.1),
+    ]
+
+    stats = summarize_matches_for_direction(matches, "buy", forward_bars=10, timeframe="M15")
+
+    assert stats.average_rr == pytest.approx(3.0)
+    assert stats.average_drawdown_pct == pytest.approx(1.25)
+
+
+def test_summarize_matches_for_direction_holding_time_reflects_forward_bars_and_timeframe() -> None:
+    stats = summarize_matches_for_direction([], "buy", forward_bars=10, timeframe="M15")
+
+    assert stats.average_holding_time_minutes == pytest.approx(150.0)
+    assert stats.found_count == 0
+    assert stats.win_rate_pct is None
+    assert stats.average_rr is None
+    assert stats.average_drawdown_pct is None
+
+
+def test_summarize_matches_for_direction_skips_rr_for_zero_adverse_excursion() -> None:
+    matches = [_match(outcome=2.0, adverse_long=0.0, adverse_short=0.0)]
+
+    stats = summarize_matches_for_direction(matches, "buy", forward_bars=10, timeframe="M15")
+
+    # A zero adverse excursion means "never moved against the trade" --
+    # an undefined (infinite) RR, honestly excluded rather than divided
+    # by zero or fabricated.
+    assert stats.average_rr is None
+    assert stats.average_drawdown_pct == pytest.approx(0.0)

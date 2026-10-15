@@ -70,10 +70,7 @@ def validate_execution(request: ExecutionValidationRequest) -> ExecutionValidati
 
     if request.account_type not in _KNOWN_ACCOUNT_TYPES:
         reasons.append(f"account_type_unknown: {request.account_type!r}")
-    if (
-        request.expected_account is not None
-        and request.expected_account != request.actual_account
-    ):
+    if request.expected_account is not None and request.expected_account != request.actual_account:
         reasons.append(
             f"account_number_changed: expected {request.expected_account!r}, "
             f"got {request.actual_account!r}"
@@ -82,8 +79,7 @@ def validate_execution(request: ExecutionValidationRequest) -> ExecutionValidati
         reasons.append("live_account_not_approved")
     if request.order_symbol != request.expected_symbol:
         reasons.append(
-            f"incorrect_symbol: expected {request.expected_symbol!r}, "
-            f"got {request.order_symbol!r}"
+            f"incorrect_symbol: expected {request.expected_symbol!r}, got {request.order_symbol!r}"
         )
     if not request.is_terminal_connected:
         reasons.append("terminal_not_connected")

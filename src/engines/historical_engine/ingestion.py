@@ -68,9 +68,7 @@ def _parse_twelvedata_datetime(raw: str) -> datetime:
     return datetime.strptime(raw, fmt).replace(tzinfo=UTC)
 
 
-def _to_candle(
-    symbol_id: uuid.UUID, timeframe: str, raw: dict[str, Any], *, source: str
-) -> Candle:
+def _to_candle(symbol_id: uuid.UUID, timeframe: str, raw: dict[str, Any], *, source: str) -> Candle:
     """Convert a single TwelveData candle record into a `Candle` ORM instance."""
     volume = raw.get("volume")
     return Candle(

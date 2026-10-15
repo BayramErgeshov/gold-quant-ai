@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from src.common.logging import get_logger
 from src.settings import Settings, get_settings
+
+logger = get_logger(__name__)
 
 
 class TelegramNotifier(ABC):
@@ -52,18 +55,49 @@ class RealTelegramNotifier(TelegramNotifier):
     async def send_message(self, chat_id: str, text: str) -> bool:
         """Send a message via the Telegram Bot API.
 
+        Never raises: a notification failure (invalid/missing bot token,
+        network error, rate limit, etc.) must never be allowed to
+        propagate out of here. A trade has typically already been placed
+        on the broker and journaled by the time this is called
+        (`src.workflows.trade.pipeline.SignalWorkflow.run()`); letting an
+        exception escape would unwind the caller's database transaction
+        and silently erase that journal entry for a real, already-executed
+        trade — a correctness bug discovered in production (a missing
+        `TELEGRAM_BOT_TOKEN` rolled back an otherwise-successful trade
+        journal write). Notification is best-effort by design; execution
+        and journaling are not.
+
         Args:
             chat_id: Target chat/channel id.
-            text: Message body (Markdown-formatted).
+            text: Message body (plain text).
 
         Returns:
-            True if Telegram accepted the message.
+            True if Telegram accepted the message, False if it was
+            rejected or the send attempt raised for any reason.
+
+        Sent as plain text (no `parse_mode`), not Telegram's legacy
+        Markdown mode: an institutional audit finding -- every formatter
+        in `src.core.notifications.formatting` interpolates freeform
+        dynamic text (news headlines, error messages, department
+        reasoning) that legitimately contains `*`/`_`/`` ` ``/`[`
+        characters. Legacy Markdown parses the *entire* message as one
+        document, so a single stray/unbalanced special character
+        anywhere in that dynamic text -- not just in the static header --
+        makes Telegram reject the whole message
+        (`telegram.error.BadRequest: Can't parse entities`), silently
+        dropping a required trade/signal notification (TELEGRAM.md:
+        "Immediately send every signal"). Reliable delivery of the
+        content matters far more here than bold headers.
         """
         import telegram
 
-        bot = telegram.Bot(token=self._settings.telegram_env.bot_token.get_secret_value())
-        message = await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
-        return message is not None
+        try:
+            bot = telegram.Bot(token=self._settings.telegram_env.bot_token.get_secret_value())
+            message = await bot.send_message(chat_id=chat_id, text=text)
+            return message is not None
+        except Exception:
+            logger.exception("telegram_send_message_failed", chat_id=chat_id)
+            return False
 
     async def verify_connection(self) -> str:
         """Verify the bot token is valid via `getMe` (MT5_ENGINE.md-style

@@ -56,6 +56,4 @@ def test_is_concentration_excessive_false_when_within_limit() -> None:
     exposure = {"SILVER": 2.0}
     correlations = {"SILVER": 0.9}
 
-    assert not is_concentration_excessive(
-        exposure, correlations, max_correlated_exposure_pct=5.0
-    )
+    assert not is_concentration_excessive(exposure, correlations, max_correlated_exposure_pct=5.0)

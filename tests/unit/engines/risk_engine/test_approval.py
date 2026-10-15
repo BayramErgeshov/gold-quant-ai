@@ -41,9 +41,7 @@ def _base_request(**overrides: object) -> TradeApprovalRequest:
         (100.0, "institutional_grade"),
     ],
 )
-def test_classify_confidence_level_boundaries(
-    confidence_pct: float, expected_level: str
-) -> None:
+def test_classify_confidence_level_boundaries(confidence_pct: float, expected_level: str) -> None:
     assert classify_confidence_level(confidence_pct) == expected_level
 
 
@@ -82,14 +80,10 @@ def test_market_closed_is_rejected() -> None:
 
 
 def test_insufficient_historical_edge_is_rejected() -> None:
-    decision = evaluate_trade(
-        _base_request(historical_edge_pct=0.1, min_historical_edge_pct=0.3)
-    )
+    decision = evaluate_trade(_base_request(historical_edge_pct=0.1, min_historical_edge_pct=0.3))
 
     assert decision.approved is False
-    assert any(
-        "historical_edge_insufficient" in reason for reason in decision.rejection_reasons
-    )
+    assert any("historical_edge_insufficient" in reason for reason in decision.rejection_reasons)
 
 
 def test_critical_news_imminent_is_rejected() -> None:
@@ -121,9 +115,31 @@ def test_exposure_breaches_are_included_in_rejection_reasons() -> None:
 
 
 def test_multiple_failures_are_all_reported() -> None:
-    decision = evaluate_trade(
-        _base_request(is_market_open=False, critical_news_imminent=True)
-    )
+    decision = evaluate_trade(_base_request(is_market_open=False, critical_news_imminent=True))
 
     assert decision.approved is False
     assert len(decision.rejection_reasons) == 2
+
+
+def test_possible_setup_tier_is_rejected_by_default() -> None:
+    decision = evaluate_trade(_base_request(confidence_pct=65.0))
+
+    assert decision.approved is False
+    assert decision.confidence_level == "possible_setup"
+    assert any("confidence_level_not_executable" in reason for reason in decision.rejection_reasons)
+
+
+def test_demo_learning_mode_allows_the_possible_setup_tier() -> None:
+    # Per the "Demo Learning Mode" production requirement: an explicit,
+    # user-controlled way to widen this floor -- never a silent override.
+    decision = evaluate_trade(_base_request(confidence_pct=65.0, demo_learning_mode=True))
+
+    assert decision.approved is True
+    assert decision.confidence_level == "possible_setup"
+
+
+def test_demo_learning_mode_still_rejects_below_the_possible_setup_floor() -> None:
+    decision = evaluate_trade(_base_request(confidence_pct=50.0, demo_learning_mode=True))
+
+    assert decision.approved is False
+    assert decision.confidence_level == "observation_only"

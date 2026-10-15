@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.engines.book_engine.pipeline import BOOKS_COLLECTION_NAME, BookIngestionPipeline
 from src.engines.book_engine.text_extraction import ExtractedPage
 from src.repositories.book_chunk_repository import BookChunkRepository
+from src.repositories.book_claim_repository import BookClaimRepository
 from src.repositories.book_repository import BookRepository
 from src.repositories.concept_repository import ConceptRelationshipRepository, ConceptRepository
 from tests.integration.book_engine._fakes import FakeEmbeddingProvider, FakeQdrantClient
@@ -32,6 +33,7 @@ def _build_pipeline(session: AsyncSession, qdrant: FakeQdrantClient) -> BookInge
     return BookIngestionPipeline(
         book_repository=BookRepository(session),
         chunk_repository=BookChunkRepository(session),
+        claim_repository=BookClaimRepository(session),
         concept_repository=ConceptRepository(session),
         concept_relationship_repository=ConceptRelationshipRepository(session),
         embedding_provider=FakeEmbeddingProvider(dimension=8),
@@ -48,7 +50,7 @@ async def test_ingest_creates_book_chunks_and_qdrant_points(
     pdf_path.write_bytes(b"irrelevant, extract_pages is mocked")
 
     with patch(
-        "src.engines.book_engine.pipeline.extract_pages",
+        "src.engines.book_engine.pipeline.extract_document_pages",
         return_value=[ExtractedPage(page_number=1, text=_SMART_MONEY_TEXT, used_ocr=False)],
     ):
         book = await pipeline.ingest(pdf_path, title="Smart Money Concepts", author="Author X")
@@ -66,6 +68,13 @@ async def test_ingest_creates_book_chunks_and_qdrant_points(
     assert collection.size == 8
     assert len(collection.points) == 1
 
+    claims = await BookClaimRepository(session).list_all()
+    assert len(claims) > 0
+    assert all(claim.book_id == book.id for claim in claims)
+    assert all(claim.chunk_id == chunks[0].id for claim in claims)
+    assert all(claim.topic == "smart_money" for claim in claims)
+    assert all(claim.validation_status == "pending" for claim in claims)
+
 
 async def test_ingest_is_idempotent_for_same_source_path(
     session: AsyncSession, tmp_path: Path
@@ -76,7 +85,7 @@ async def test_ingest_is_idempotent_for_same_source_path(
     pdf_path.write_bytes(b"irrelevant")
 
     with patch(
-        "src.engines.book_engine.pipeline.extract_pages",
+        "src.engines.book_engine.pipeline.extract_document_pages",
         return_value=[ExtractedPage(page_number=1, text=_SMART_MONEY_TEXT, used_ocr=False)],
     ):
         first = await pipeline.ingest(pdf_path, title="Book", author="Author")
@@ -96,7 +105,7 @@ async def test_ingest_creates_knowledge_graph_relationships_for_co_occurring_top
     pdf_path.write_bytes(b"irrelevant")
 
     with patch(
-        "src.engines.book_engine.pipeline.extract_pages",
+        "src.engines.book_engine.pipeline.extract_document_pages",
         return_value=[ExtractedPage(page_number=1, text=_SMART_MONEY_TEXT, used_ocr=False)],
     ):
         await pipeline.ingest(pdf_path, title="Book", author="Author")
@@ -117,7 +126,7 @@ async def test_ingest_registers_single_concept_when_only_one_topic_matches(
     pdf_path.write_bytes(b"irrelevant")
 
     with patch(
-        "src.engines.book_engine.pipeline.extract_pages",
+        "src.engines.book_engine.pipeline.extract_document_pages",
         return_value=[
             ExtractedPage(page_number=1, text="This chapter is only about gold.", used_ocr=False)
         ],
@@ -143,7 +152,7 @@ async def test_ingest_skips_book_with_no_extractable_text(
     pdf_path.write_bytes(b"irrelevant")
 
     with patch(
-        "src.engines.book_engine.pipeline.extract_pages",
+        "src.engines.book_engine.pipeline.extract_document_pages",
         return_value=[ExtractedPage(page_number=1, text="", used_ocr=False)],
     ):
         book = await pipeline.ingest(pdf_path, title="Blank", author="Nobody")

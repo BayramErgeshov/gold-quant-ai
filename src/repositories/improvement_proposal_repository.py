@@ -35,3 +35,24 @@ class ImprovementProposalRepository(BaseRepository[ImprovementProposal]):
         )
         result = await self.session.execute(statement)
         return list(result.scalars().all())
+
+    async def exists_with_title(self, title: str) -> bool:
+        """Check whether a proposal with this exact title already exists.
+
+        Used to avoid raising the same hypothesis as a duplicate pending
+        proposal every time a new losing trade re-triggers the recurring-
+        factor scan (SELF_LEARNING_ENGINE.md "User Approval": a proposal
+        awaits a single explicit decision, not repeated re-submission).
+
+        Args:
+            title: The candidate proposal's title (built from a
+                `Hypothesis.question`, deterministic for a given
+                recurring factor name).
+
+        Returns:
+            True if any proposal (pending, approved, or rejected) already
+            has this title.
+        """
+        statement = select(ImprovementProposal.id).where(ImprovementProposal.title == title)
+        result = await self.session.execute(statement)
+        return result.scalar_one_or_none() is not None

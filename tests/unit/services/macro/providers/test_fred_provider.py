@@ -89,9 +89,7 @@ async def test_request_performs_real_http_call_over_mock_transport() -> None:
         return real_async_client(transport=httpx.MockTransport(handler), **kwargs)
 
     provider = _provider()
-    with patch(
-        "src.services.macro.providers.fred_provider.httpx.AsyncClient", fake_async_client
-    ):
+    with patch("src.services.macro.providers.fred_provider.httpx.AsyncClient", fake_async_client):
         observations = await provider.fetch(series_id="CPIAUCSL")
 
     assert observations == [{"date": "2026-01-01", "value": "1"}]

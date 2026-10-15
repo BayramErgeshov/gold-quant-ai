@@ -32,9 +32,7 @@ async def test_get_by_source_path_returns_none_when_missing(session: AsyncSessio
 
 async def test_list_by_category(session: AsyncSession) -> None:
     repo = BookRepository(session)
-    await repo.add(
-        Book(title="A", author="X", source_path="a.pdf", category="smart_money")
-    )
+    await repo.add(Book(title="A", author="X", source_path="a.pdf", category="smart_money"))
     await repo.add(Book(title="B", author="Y", source_path="b.pdf", category="risk"))
 
     results = await repo.list_by_category("smart_money")

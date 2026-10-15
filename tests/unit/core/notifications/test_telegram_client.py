@@ -68,6 +68,18 @@ async def test_send_message_returns_false_when_bot_returns_none() -> None:
     assert result is False
 
 
+async def test_send_message_returns_false_instead_of_raising_on_failure() -> None:
+    class _RaisingTelegramModule:
+        def Bot(self, *, token: str) -> None:  # noqa: N802 - matches telegram.Bot's own casing
+            raise ValueError("You must pass the token you received from https://t.me/Botfather!")
+
+    with patch.dict(sys.modules, {"telegram": _RaisingTelegramModule()}):
+        notifier = RealTelegramNotifier(get_settings())
+        result = await notifier.send_message("12345", "hello")
+
+    assert result is False
+
+
 async def test_verify_connection_returns_bot_username() -> None:
     fake_bot = _FakeBot()
     with patch.dict(sys.modules, {"telegram": _FakeTelegramModule(fake_bot)}):

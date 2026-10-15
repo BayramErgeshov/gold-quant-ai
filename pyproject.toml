@@ -12,6 +12,7 @@ python = "^3.12"
 # Core
 pydantic = "^2.9.2"
 pydantic-settings = "^2.6.1"
+python-dotenv = "^1.0.1"
 PyYAML = "^6.0.2"
 
 # Async runtime / scheduling
@@ -47,6 +48,11 @@ pandas = "^2.2.3"
 # (linear/tree/ensemble) per MACHINE_LEARNING_ENGINE.md "No black-box decisions"
 scikit-learn = "^1.5.2"
 
+# Market Correlation Engine (Phase 21): Engle-Granger cointegration / ADF
+# stationarity testing — a well-vetted, standard econometrics
+# implementation rather than a hand-rolled critical-value table.
+statsmodels = "^0.14.4"
+
 # Monitoring (Phase 17): host/process resource metrics
 psutil = "^6.1.1"
 
@@ -57,6 +63,14 @@ langdetect = "^1.0.9"
 pytesseract = "^0.3.13"
 pdf2image = "^1.17.0"
 
+# Book Engine (Phase 23): EPUB/DOCX ingestion, alongside the existing PDF/TXT support
+python-docx = "^1.2.0"
+EbookLib = "^0.20"
+
+# Minimalistic local web UI (Phase 24): dashboard + settings, localhost-only
+fastapi = "^0.115.5"
+uvicorn = "^0.32.1"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"
 pytest-asyncio = "^0.24.0"
@@ -64,6 +78,7 @@ pytest-cov = "^6.0.0"
 ruff = "^0.7.4"
 mypy = "^1.13.0"
 bandit = "^1.8.0"
+pip-audit = "^2.7.3"
 types-PyYAML = "^6.0.12.20240917"
 types-psutil = "^6.1.0"
 pre-commit = "^4.0.1"
@@ -81,6 +96,12 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "N"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency injection idiom is `param: T = Depends(...)` in the
+# function signature itself -- not the mutable-default-argument footgun
+# B008 exists to catch.
+"src/interfaces/web/app.py" = ["B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
@@ -123,6 +144,18 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "sklearn.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "statsmodels.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "docx.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "ebooklib.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

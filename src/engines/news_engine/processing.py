@@ -64,7 +64,5 @@ def process_raw_article(
             entity_count=entity_count,
         ),
         expected_volatility=expected_volatility(category),
-        content_hash=compute_content_hash(
-            title=title, source=source, published_at=published_at
-        ),
+        content_hash=compute_content_hash(title=title, source=source, published_at=published_at),
     )

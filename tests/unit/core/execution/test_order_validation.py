@@ -54,9 +54,7 @@ def test_expected_account_none_skips_account_check() -> None:
 
 
 def test_live_account_without_approval_is_rejected() -> None:
-    result = validate_execution(
-        _base_request(account_type="live", live_trading_approved=False)
-    )
+    result = validate_execution(_base_request(account_type="live", live_trading_approved=False))
 
     assert result.approved is False
     assert "live_account_not_approved" in result.rejection_reasons
@@ -104,9 +102,7 @@ def test_chief_ai_rejection_is_reported() -> None:
 
 
 def test_multiple_failures_are_all_reported() -> None:
-    result = validate_execution(
-        _base_request(is_market_open=False, risk_approved=False)
-    )
+    result = validate_execution(_base_request(is_market_open=False, risk_approved=False))
 
     assert result.approved is False
     assert len(result.rejection_reasons) == 2

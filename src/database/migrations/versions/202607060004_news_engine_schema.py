@@ -23,9 +23,7 @@ _EXPECTED_VOLATILITY_LEVELS = "('low', 'medium', 'high')"
 
 def _timestamp_columns() -> list[sa.Column[Any]]:
     return [
-        sa.Column(
-            "id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False
-        ),
+        sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),

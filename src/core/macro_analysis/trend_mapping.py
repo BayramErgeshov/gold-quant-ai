@@ -77,9 +77,7 @@ def analyze_series_trend(
         bias = mapping.falling_bias
         supporting.append(mapping.falling_rationale)
 
-    confidence = (
-        min(1.0, abs(slope_pct) / (trend_threshold_pct * 4)) if bias != "neutral" else 0.0
-    )
+    confidence = min(1.0, abs(slope_pct) / (trend_threshold_pct * 4)) if bias != "neutral" else 0.0
 
     return AgentReport(
         agent_name=agent_name,

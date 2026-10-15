@@ -24,9 +24,7 @@ _MODEL_STATUSES = "('training', 'candidate', 'production', 'retired')"
 
 def _timestamp_columns() -> list[sa.Column[Any]]:
     return [
-        sa.Column(
-            "id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False
-        ),
+        sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -51,9 +49,7 @@ def upgrade() -> None:
         sa.Column("n_samples", sa.Integer(), server_default="0", nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name", "version", name="uq_ml_models_name_version"),
-        sa.CheckConstraint(
-            f"model_type IN {_MODEL_TYPES}", name="ck_ml_models_model_type_valid"
-        ),
+        sa.CheckConstraint(f"model_type IN {_MODEL_TYPES}", name="ck_ml_models_model_type_valid"),
         sa.CheckConstraint(f"status IN {_MODEL_STATUSES}", name="ck_ml_models_status_valid"),
     )
     op.create_index("ix_ml_models_name", "ml_models", ["name"])

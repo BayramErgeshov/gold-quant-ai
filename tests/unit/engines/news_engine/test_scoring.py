@@ -26,21 +26,15 @@ def test_unknown_category_has_low_volatility() -> None:
 
 
 def test_importance_score_increases_with_category_impact() -> None:
-    high = compute_importance_score(
-        category="central_bank", source_reliability=0.5, entity_count=0
-    )
+    high = compute_importance_score(category="central_bank", source_reliability=0.5, entity_count=0)
     low = compute_importance_score(category=None, source_reliability=0.5, entity_count=0)
 
     assert high > low
 
 
 def test_importance_score_increases_with_source_reliability() -> None:
-    reliable = compute_importance_score(
-        category=None, source_reliability=1.0, entity_count=0
-    )
-    unreliable = compute_importance_score(
-        category=None, source_reliability=0.0, entity_count=0
-    )
+    reliable = compute_importance_score(category=None, source_reliability=1.0, entity_count=0)
+    unreliable = compute_importance_score(category=None, source_reliability=0.0, entity_count=0)
 
     assert reliable > unreliable
 

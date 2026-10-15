@@ -15,6 +15,24 @@ from src.models.trade import Trade
 
 _STOP_TO_VOLATILITY_RATIO_THRESHOLD = 0.5
 
+# Every independent opinion department this platform can record a vote
+# for on `Trade.department_votes` (excludes pipeline stages like
+# "statistics"/"risk"/"execution", which never carry a bias). Kept
+# separate from `src.engines.chief_ai.decision.REQUIRED_REPORTS` since
+# that tuple also includes those non-opinion stages.
+OPINION_DEPARTMENTS: tuple[str, ...] = (
+    "technical",
+    "historical",
+    "ml",
+    "macro",
+    "news",
+    "correlation",
+    "order_flow",
+    "scalping_engine",
+    "swing_engine",
+    "shakky_engine",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TradeContext:
@@ -99,9 +117,7 @@ def analyze_losing_trade(trade: Trade, context: TradeContext) -> list[TradeFacto
         )
     if context.news_imminent_at_entry:
         factors.append(
-            TradeFactor(
-                name="news_ignored", detail="High-impact news was imminent at entry."
-            )
+            TradeFactor(name="news_ignored", detail="High-impact news was imminent at entry.")
         )
     if _stop_was_too_close(trade, context):
         factors.append(
@@ -158,3 +174,125 @@ def analyze_winning_trade(trade: Trade, context: TradeContext) -> list[TradeFact
             )
         )
     return factors
+
+
+def disagreeing_departments(trade: Trade) -> list[str]:
+    """Identify which departments' recorded vote opposed this trade's own direction.
+
+    Uses `Trade.department_votes` — a snapshot taken at signal time
+    (`src.workflows.trade.pipeline.SignalWorkflow`), the only decision-time
+    evidence actually persisted per trade. Per the "Post Trade Learning"
+    production requirement: "which AI agents disagreed."
+
+    Args:
+        trade: The closed trade to review.
+
+    Returns:
+        Department names whose recorded `bias` opposed `trade.direction`.
+        Empty if no department votes were recorded, or none disagreed.
+    """
+    if not trade.department_votes:
+        return []
+    opposing_bias = "bearish" if trade.direction == "buy" else "bullish"
+    return [
+        name for name, vote in trade.department_votes.items() if vote.get("bias") == opposing_bias
+    ]
+
+
+def missing_departments(trade: Trade) -> list[str]:
+    """Identify which known opinion departments had no recorded vote for this trade.
+
+    Per the "Post Trade Learning" production requirement: "what external
+    information was missing." A missing department here most often means
+    an unconfigured data source at signal time (e.g. Macro/News before
+    FRED/NewsAPI keys were set) rather than a bug — this only reports the
+    fact, never why.
+
+    Args:
+        trade: The closed trade to review.
+
+    Returns:
+        Names from `OPINION_DEPARTMENTS` absent from
+        `trade.department_votes`. Empty if every known department voted,
+        or `department_votes` predates this platform's snapshotting
+        (in which case every name is reported, honestly, as missing).
+    """
+    present = set(trade.department_votes) if trade.department_votes else set()
+    return [name for name in OPINION_DEPARTMENTS if name not in present]
+
+
+def outcome_direction(trade: Trade) -> int | None:
+    """The direction price actually moved: +1 up, -1 down, None if unknown.
+
+    Shared by `department_performance.compute_department_reliability`
+    (aggregate, across many trades) and `department_correctness` below
+    (a single trade) — the same definition of "which way did it actually
+    go," never computed two different ways.
+    """
+    if trade.realized_pnl is None:
+        return None
+    trade_direction = 1 if trade.direction == "buy" else -1
+    won = trade.realized_pnl > 0
+    return trade_direction if won else -trade_direction
+
+
+def department_direction(bias: object) -> int | None:
+    """A recorded `bias` string as a direction: +1 bullish, -1 bearish, None otherwise."""
+    if bias == "bullish":
+        return 1
+    if bias == "bearish":
+        return -1
+    return None  # neutral or unrecognized: not a directional call
+
+
+def department_correctness(trade: Trade) -> dict[str, bool]:
+    """Identify which departments' recorded vote matched what actually happened.
+
+    Distinct from `disagreeing_departments` (which compares each
+    department's vote against the trade's own ENTRY direction, known at
+    signal time): this compares against the REALIZED outcome, known only
+    in hindsight — "which AI agents were actually right or wrong," per
+    the "Post Trade Learning" production requirement.
+
+    Args:
+        trade: The closed trade to review.
+
+    Returns:
+        `{department_name: was_correct}` for every department that both
+        cast a directional (non-neutral) vote and has a known outcome.
+        Empty if the outcome is unknown (`realized_pnl` unset) or no
+        department cast a directional vote.
+    """
+    outcome = outcome_direction(trade)
+    if outcome is None or not trade.department_votes:
+        return {}
+    correctness: dict[str, bool] = {}
+    for name, vote in trade.department_votes.items():
+        direction = department_direction(vote.get("bias"))
+        if direction is None:
+            continue
+        correctness[name] = direction == outcome
+    return correctness
+
+
+def analyze_department_disagreement(trade: Trade) -> list[TradeFactor]:
+    """Build one `TradeFactor` per department that disagreed with this trade's direction.
+
+    Each factor's `name` embeds the specific department (e.g.
+    `"department_disagreed:macro"`) rather than a single shared name —
+    otherwise multiple departments disagreeing within *one* trade would
+    look like a recurring pattern to `generate_hypotheses_from_factors`
+    after just one post-mortem, instead of the same department disagreeing
+    across *multiple* trades.
+    """
+    votes = trade.department_votes or {}
+    return [
+        TradeFactor(
+            name=f"department_disagreed:{name}",
+            detail=(
+                f"{name!r} voted against the {trade.direction} entry "
+                f"(confidence {float(votes[name].get('confidence', 0.0)):.0%})."
+            ),
+        )
+        for name in disagreeing_departments(trade)
+    ]

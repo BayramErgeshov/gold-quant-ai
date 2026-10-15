@@ -22,14 +22,19 @@ from src.models import (  # noqa: F401
     book_claim,
     candle,
     concept,
+    correlated_instrument,
+    correlated_price,
     historical_similarity,
     improvement_proposal,
     market_regime,
     ml_model,
     news_article,
+    runtime_settings,
+    strategy_profile,
     symbol,
     system_log,
     trade,
+    weight_recommendation,
 )
 from src.settings import get_settings
 

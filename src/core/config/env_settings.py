@@ -126,6 +126,4 @@ class MonitoringEnvSettings(BaseSettings):
 
     prometheus_port: int = Field(default=9090, alias="PROMETHEUS_PORT")
     grafana_port: int = Field(default=3000, alias="GRAFANA_PORT")
-    grafana_admin_password: SecretStr = Field(
-        default=SecretStr(""), alias="GRAFANA_ADMIN_PASSWORD"
-    )
+    grafana_admin_password: SecretStr = Field(default=SecretStr(""), alias="GRAFANA_ADMIN_PASSWORD")

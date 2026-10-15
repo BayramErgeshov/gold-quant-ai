@@ -21,9 +21,7 @@ def test_healthy_when_every_critical_check_passes() -> None:
 
 
 def test_unhealthy_when_a_critical_check_fails() -> None:
-    report = build_health_report(
-        [_check("postgres", healthy=True), _check("redis", healthy=False)]
-    )
+    report = build_health_report([_check("postgres", healthy=True), _check("redis", healthy=False)])
 
     assert report.healthy is False
 

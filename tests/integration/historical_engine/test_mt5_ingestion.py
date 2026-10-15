@@ -10,6 +10,7 @@ from src.core.execution.mt5_client import (
     AccountInfo,
     MT5Client,
     OpenPosition,
+    OrderBookSnapshot,
     OrderRequest,
     OrderResult,
     SymbolTick,
@@ -96,6 +97,9 @@ class _FakeMT5Client(MT5Client):
 
     async def get_symbol_tick(self, symbol: str) -> SymbolTick:
         raise NotImplementedError
+
+    async def get_order_book(self, symbol: str) -> OrderBookSnapshot | None:
+        return None
 
     async def get_open_positions(
         self, *, symbol: str | None = None, magic_number: int | None = None

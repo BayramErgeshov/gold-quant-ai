@@ -49,9 +49,7 @@ class ClassificationModel:
     feature_names: tuple[str, ...]
     trained_at: datetime | None = None
     n_samples: int = 0
-    _estimator: Any = field(
-        default_factory=lambda: LogisticRegression(max_iter=1000), repr=False
-    )
+    _estimator: Any = field(default_factory=lambda: LogisticRegression(max_iter=1000), repr=False)
 
     def fit(self, samples: list[Sample]) -> None:
         """Fit the model on labeled samples.

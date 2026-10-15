@@ -48,7 +48,7 @@ jobs:
         run: poetry run mypy src
 
   security:
-    name: Security scan (bandit)
+    name: Security scan (bandit + pip-audit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +61,8 @@ jobs:
         run: poetry install --no-interaction --with dev
       - name: Bandit
         run: poetry run bandit -r src -q
+      - name: pip-audit (dependency vulnerability scan)
+        run: poetry run pip-audit --strict --progress-spinner=off
 
   test:
     name: Unit + integration tests
@@ -109,6 +111,12 @@ jobs:
         run: poetry install --no-interaction --with dev
       - name: Run database migrations
         run: poetry run alembic upgrade head
+      - name: Check CURRENT_STATE.md is up to date
+        env:
+          PYTHONPATH: .
+        run: |
+          poetry run python scripts/generate_current_state.py
+          git diff --exit-code CURRENT_STATE.md
       - name: Run tests
         run: poetry run pytest --cov-report=xml
       - name: Upload coverage

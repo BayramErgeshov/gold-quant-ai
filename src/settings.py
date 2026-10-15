@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
 
 from src.core.config.env_settings import (
@@ -85,6 +86,11 @@ def get_settings() -> Settings:
     Returns:
         The process-wide `Settings` singleton.
     """
+    # Containers get `.env` via docker-compose's own `env_file:` directive;
+    # a script run directly against the venv (as every script under
+    # `scripts/` is) has no such mechanism, so `.env` is loaded here too.
+    # Never overrides a variable already present in the real environment.
+    load_dotenv(override=False)
     environment = _resolve_environment()
     raw_platform_config = load_platform_config(environment)
 

@@ -53,9 +53,7 @@ def test_find_displacement_index_detects_large_body() -> None:
 
 
 def test_find_displacement_index_none_when_no_displacement() -> None:
-    candles = [
-        make_candle(index, open_=100, high=101, low=99, close=100.5) for index in range(10)
-    ]
+    candles = [make_candle(index, open_=100, high=101, low=99, close=100.5) for index in range(10)]
 
     assert find_displacement_index(candles) is None
 

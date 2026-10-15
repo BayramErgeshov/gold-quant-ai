@@ -5,17 +5,32 @@ acceleration. Trend exhaustion." Direction and strength come from a
 least-squares regression slope (`src.utils.statistics`); age counts
 consecutive same-direction closes; acceleration compares the second half
 of the window's slope against the first half.
+
+Per the "Trend Engine" production requirement: EMA20/50/100/200 and ADX
+supplement (never replace) the slope-based bias -- a full bullish/bearish
+EMA "stack" and a strong ADX reading raise confidence in whichever
+direction the regression slope already found, and a contradicting EMA
+stack is reported as opposing evidence; neither ever flips the bias
+itself, since a caller with too little history for EMA200 (200+ candles)
+or ADX (29+ candles) must still get the same slope-only read this agent
+has always produced.
 """
 
 from __future__ import annotations
 
 from src.core.technical_analysis.agent import AgentReport, Bias, TechnicalAgent
 from src.models.candle import Candle
+from src.utils.indicators import average_directional_index, exponential_moving_average
 from src.utils.statistics import linear_regression_slope_pct
 
 _MIN_CANDLES = 4
 _DEFAULT_TREND_THRESHOLD_PCT = 0.05
 _MIN_HALF_WINDOW = 2
+_EMA_PERIODS: tuple[int, ...] = (20, 50, 100, 200)
+_ADX_PERIOD = 14
+_ADX_STRONG_TREND_THRESHOLD = 25.0
+_EMA_ALIGNMENT_CONFIDENCE_BOOST = 0.15
+_ADX_CONFIDENCE_BOOST = 0.15
 
 
 class TrendAgent(TechnicalAgent):
@@ -77,18 +92,46 @@ class TrendAgent(TechnicalAgent):
                 opposing.append("Trend is decelerating: possible exhaustion")
             confidence = min(1.0, abs(slope_pct) / (self._trend_threshold_pct * 4))
 
+        metrics: dict[str, float] = {
+            "slope_pct": slope_pct,
+            "trend_age_bars": float(age),
+            "first_half_slope_pct": first_half_slope,
+            "second_half_slope_pct": second_half_slope,
+        }
+
+        ema_values: dict[int, float] = {}
+        for period in _EMA_PERIODS:
+            series = exponential_moving_average(closes, period=period)
+            if series is not None:
+                ema_values[period] = series[-1]
+                metrics[f"ema_{period}"] = series[-1]
+
+        if bias != "neutral" and len(ema_values) == len(_EMA_PERIODS):
+            stacked_bullish = ema_values[20] > ema_values[50] > ema_values[100] > ema_values[200]
+            stacked_bearish = ema_values[20] < ema_values[50] < ema_values[100] < ema_values[200]
+            if (bias == "bullish" and stacked_bullish) or (bias == "bearish" and stacked_bearish):
+                supporting.append("EMA20/50/100/200 are fully stacked, confirming the trend")
+                confidence = min(1.0, confidence + _EMA_ALIGNMENT_CONFIDENCE_BOOST)
+            elif (bias == "bullish" and stacked_bearish) or (bias == "bearish" and stacked_bullish):
+                opposing.append("EMA20/50/100/200 are stacked against the detected trend")
+
+        adx = average_directional_index(candles, period=_ADX_PERIOD)
+        if adx is not None:
+            metrics["adx"] = adx
+            if bias != "neutral":
+                if adx >= _ADX_STRONG_TREND_THRESHOLD:
+                    supporting.append(f"ADX {adx:.1f} confirms a strong trend")
+                    confidence = min(1.0, confidence + _ADX_CONFIDENCE_BOOST)
+                else:
+                    opposing.append(f"ADX {adx:.1f} suggests a weak or absent trend")
+
         return AgentReport(
             agent_name=self.name,
             bias=bias,
             confidence=confidence,
             supporting_evidence=supporting,
             opposing_evidence=opposing,
-            metrics={
-                "slope_pct": slope_pct,
-                "trend_age_bars": float(age),
-                "first_half_slope_pct": first_half_slope,
-                "second_half_slope_pct": second_half_slope,
-            },
+            metrics=metrics,
         )
 
     @staticmethod

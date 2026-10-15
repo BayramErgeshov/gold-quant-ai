@@ -56,9 +56,7 @@ class CandleRepository(BaseRepository[Candle]):
         )
 
         new_candles = [
-            candle
-            for candle in candles
-            if _ensure_utc(candle.timestamp) not in existing_timestamps
+            candle for candle in candles if _ensure_utc(candle.timestamp) not in existing_timestamps
         ]
         self.session.add_all(new_candles)
         await self.session.flush()
@@ -109,6 +107,35 @@ class CandleRepository(BaseRepository[Candle]):
 
         result = await self.session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_most_recent(
+        self, symbol_id: uuid.UUID, timeframe: str, *, count: int
+    ) -> list[Candle]:
+        """Fetch the most recent `count` candles for a symbol/timeframe.
+
+        Unlike `list_range`, whose `limit` truncates an ascending-ordered
+        query (returning the *oldest* rows once history exceeds `limit`),
+        this fetches descending and reverses the result — for callers
+        that need the tail of a long history (e.g. a live scan's rolling
+        analysis window) rather than a bounded range from the start.
+
+        Args:
+            symbol_id: Owning symbol id.
+            timeframe: One of `src.models.candle.TIMEFRAMES`.
+            count: Maximum number of most-recent candles to return.
+
+        Returns:
+            Matching `Candle` rows ordered by timestamp ascending (oldest
+            of the recent set first, most recent last).
+        """
+        statement = (
+            select(Candle)
+            .where(Candle.symbol_id == symbol_id, Candle.timeframe == timeframe)
+            .order_by(Candle.timestamp.desc())
+            .limit(count)
+        )
+        result = await self.session.execute(statement)
+        return list(reversed(result.scalars().all()))
 
     async def latest_timestamp(self, symbol_id: uuid.UUID, timeframe: str) -> datetime | None:
         """Fetch the most recent candle timestamp for a symbol/timeframe.

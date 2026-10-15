@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from src.core.data_collection.exceptions import ProviderError
-from src.services.news.providers.newsapi_provider import NewsApiProvider
+from src.services.news.providers.newsapi_provider import (
+    REPUTABLE_FINANCIAL_DOMAINS,
+    NewsApiProvider,
+)
 from src.settings import get_settings
 
 pytestmark = pytest.mark.unit
@@ -77,6 +81,30 @@ async def test_fetch_wraps_transport_error() -> None:
         await provider.fetch(query="gold")
 
 
+async def test_fetch_passes_domains_filter_when_given() -> None:
+    provider = _provider()
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"articles": []}
+    provider._request = AsyncMock(return_value=fake_response)  # type: ignore[method-assign]
+
+    await provider.fetch(query="gold", domains=",".join(REPUTABLE_FINANCIAL_DOMAINS))
+
+    sent_params = provider._request.call_args.args[0]
+    assert sent_params["domains"] == ",".join(REPUTABLE_FINANCIAL_DOMAINS)
+
+
+async def test_fetch_omits_domains_when_not_given() -> None:
+    provider = _provider()
+    fake_response = MagicMock()
+    fake_response.json.return_value = {"articles": []}
+    provider._request = AsyncMock(return_value=fake_response)  # type: ignore[method-assign]
+
+    await provider.fetch(query="gold")
+
+    sent_params = provider._request.call_args.args[0]
+    assert "domains" not in sent_params
+
+
 async def test_request_performs_real_http_call_over_mock_transport() -> None:
     """Exercise the real `_request` implementation end-to-end without the network."""
     real_async_client = httpx.AsyncClient
@@ -86,13 +114,11 @@ async def test_request_performs_real_http_call_over_mock_transport() -> None:
         assert request.url.params["q"] == "gold"
         return httpx.Response(200, json={"articles": [{"title": "Gold rallies"}]})
 
-    def fake_async_client(**kwargs: object) -> httpx.AsyncClient:
+    def fake_async_client(**kwargs: Any) -> httpx.AsyncClient:
         return real_async_client(transport=httpx.MockTransport(handler), **kwargs)
 
     provider = _provider()
-    with patch(
-        "src.services.news.providers.newsapi_provider.httpx.AsyncClient", fake_async_client
-    ):
+    with patch("src.services.news.providers.newsapi_provider.httpx.AsyncClient", fake_async_client):
         articles = await provider.fetch(query="gold")
 
     assert articles == [{"title": "Gold rallies"}]

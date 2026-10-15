@@ -111,6 +111,7 @@ class QualityThresholds(BaseModel):
     maximum_risk_grade: str
     minimum_historical_similarity: float
     minimum_data_quality_grade: str
+    minimum_trade_quality_score: float
 
 
 class ExposureLimits(BaseModel):
@@ -172,6 +173,27 @@ class TradeManagementConfig(BaseModel):
     partial_close_options_pct: list[float]
 
 
+class SessionScheduleConfig(BaseModel):
+    """Trading-session close schedule for the "Before Market Close" report.
+
+    Attributes:
+        daily_close_utc: The connected broker's daily session close time,
+            "HH:MM" in UTC. Broker-dependent -- confirm against the
+            connected terminal rather than assuming a universal value.
+        weekly_close_weekday: The weekday whose daily close is also the
+            weekly close (a full weekend ahead) -- its pre-close report
+            additionally carries a weekend gap risk note.
+        pre_close_warning_minutes: How long before `daily_close_utc` the
+            report is sent.
+    """
+
+    daily_close_utc: str
+    weekly_close_weekday: Literal[
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    ]
+    pre_close_warning_minutes: int
+
+
 class RiskConfig(BaseModel):
     """Complete Risk Engine configuration (RISK_ENGINE.md)."""
 
@@ -182,8 +204,8 @@ class RiskConfig(BaseModel):
     drawdown: DrawdownLimits
     filters: RiskFilters
     news_protection: NewsProtectionConfig
-    correlation_watchlist: list[str]
     trade_management: TradeManagementConfig
+    session_schedule: SessionScheduleConfig
 
 
 class DatabaseConfig(BaseModel):

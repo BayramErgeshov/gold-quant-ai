@@ -59,9 +59,7 @@ def test_explain_classification_raises_before_fit() -> None:
     model = ClassificationModel(feature_names=_FEATURE_NAMES)
 
     with pytest.raises(RuntimeError, match="must be fit"):
-        explain_classification(
-            model, {"momentum_pct": 1.0, "trend_slope_pct": 1.0}, "bullish"
-        )
+        explain_classification(model, {"momentum_pct": 1.0, "trend_slope_pct": 1.0}, "bullish")
 
 
 def test_explain_classification_raises_for_unknown_label() -> None:
@@ -69,9 +67,7 @@ def test_explain_classification_raises_for_unknown_label() -> None:
     model.fit(_samples())
 
     with pytest.raises(ValueError, match="Unknown label"):
-        explain_classification(
-            model, {"momentum_pct": 1.0, "trend_slope_pct": 1.0}, "sideways"
-        )
+        explain_classification(model, {"momentum_pct": 1.0, "trend_slope_pct": 1.0}, "sideways")
 
 
 def test_explain_classification_bullish_contribution_is_positive_for_bullish_features() -> None:

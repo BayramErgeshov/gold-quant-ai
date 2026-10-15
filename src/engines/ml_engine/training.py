@@ -70,9 +70,7 @@ def _predicted_labels(model: ClassificationModel, samples: list[Sample]) -> list
     return predictions
 
 
-def _classification_metrics(
-    model: ClassificationModel, samples: list[Sample]
-) -> dict[str, float]:
+def _classification_metrics(model: ClassificationModel, samples: list[Sample]) -> dict[str, float]:
     if not samples:
         return {}
     y_true = [sample.label for sample in samples]

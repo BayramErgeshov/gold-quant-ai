@@ -85,9 +85,9 @@ def detect_engulfing(previous: Candle, current: Candle) -> CandlePattern | None:
     current_bullish = current.close > current.open
     if previous_bullish == current_bullish:
         return None
-    engulfs = min(current.open, current.close) <= min(
-        previous.open, previous.close
-    ) and max(current.open, current.close) >= max(previous.open, previous.close)
+    engulfs = min(current.open, current.close) <= min(previous.open, previous.close) and max(
+        current.open, current.close
+    ) >= max(previous.open, previous.close)
     if not engulfs:
         return None
     return CandlePattern(

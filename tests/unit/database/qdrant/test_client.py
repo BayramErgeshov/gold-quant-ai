@@ -23,9 +23,7 @@ def test_get_qdrant_client_is_cached() -> None:
 
 
 def test_get_qdrant_client_uses_settings_host_and_port() -> None:
-    with patch(
-        "src.database.qdrant.client.AsyncQdrantClient", MagicMock()
-    ) as mock_client_class:
+    with patch("src.database.qdrant.client.AsyncQdrantClient", MagicMock()) as mock_client_class:
         get_qdrant_client()
 
     mock_client_class.assert_called_once_with(host="localhost", port=6333, api_key=None)

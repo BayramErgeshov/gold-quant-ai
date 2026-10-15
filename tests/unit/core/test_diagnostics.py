@@ -114,9 +114,7 @@ async def test_check_mt5_unhealthy_when_connect_fails() -> None:
         }
     )
 
-    with patch(
-        "src.core.diagnostics.RealMT5Client.connect", AsyncMock(return_value=False)
-    ):
+    with patch("src.core.diagnostics.RealMT5Client.connect", AsyncMock(return_value=False)):
         result = await check_mt5(settings)
 
     assert result.healthy is False

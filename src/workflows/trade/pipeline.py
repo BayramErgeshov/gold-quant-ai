@@ -12,23 +12,45 @@ records the result. "Learning Queue" is Phase 14's `learning_engine`
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
-from src.core.agents.confluence import grade_from_confidence
 from src.core.execution.magic_number import compute_magic_number
 from src.core.execution.mt5_client import MT5Client, OrderRequest
 from src.core.execution.order_validation import ExecutionValidationRequest, validate_execution
-from src.core.notifications.formatting import SignalMessageData, format_signal_message
+from src.core.notifications.formatting import (
+    SignalMessageData,
+    build_reason_tags_ru_for_direction,
+    format_signal_message,
+)
 from src.core.notifications.telegram_client import TelegramNotifier
 from src.engines.chief_ai.decision import ChiefAIDecision
-from src.engines.chief_ai.explanation import explain_decision
 from src.engines.chief_ai.scenarios import build_scenario_plan
+from src.engines.historical_engine.similarity import SimilarityDisplayStats
 from src.engines.risk_engine.position_sizing import PositionSizeResult
 from src.models.trade import Trade
 from src.repositories.trade_repository import TradeRepository
+
+# MT5's `order_send()` rejects any `comment` of 30+ characters
+# (`retcode -2 'Invalid "comment" argument'`) — measured directly against
+# a real terminal via a length sweep (29 succeeds, 30 fails), not assumed
+# or guessed from documentation. An earlier measurement recorded this
+# limit as 31, which was never actually exercised end-to-end by a real
+# order until the Scalping Engine's longer strategy name pushed a comment
+# past 29 chars and the failure surfaced live. A full trade UUID alone (36
+# chars) already exceeds this, so only a short prefix is embeddable in the
+# broker-visible comment; the full id is always in the journal, looked up
+# by `broker_ticket`.
+_MT5_COMMENT_MAX_LENGTH = 29
+
+
+def _order_comment(strategy_name: str, trade_id: uuid.UUID) -> str:
+    """Build an MT5-safe order comment from a strategy name and trade id."""
+    short_id = str(trade_id)[:8]
+    return f"{strategy_name}:{short_id}"[:_MT5_COMMENT_MAX_LENGTH]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +70,24 @@ class SignalWorkflowInput:
         strategy_name: Strategy identifier for the magic number/journal.
         strategy_version: Strategy version tag.
         telegram_chat_id: Chat to preview the signal to.
+        department_votes: Snapshot of each department's bias/confidence at
+            decision time, e.g. `{"technical": {"bias": "bullish",
+            "confidence": 0.8}}` — persisted on the journaled `Trade` so
+            `src.engines.learning_engine.department_performance` can later
+            measure each department's realized accuracy. Optional so
+            callers that don't yet track per-department votes (e.g. older
+            tests) are unaffected. Also drives the richer Telegram signal
+            message's "Active engines"/"Correlation"/"Order flow" fields.
+        market_regime: The classified regime this cycle, if known — shown
+            on the Telegram signal message.
+        similarity_summary: Per the "Trade Similarity Engine" production
+            requirement: this cycle's historical-analogue summary,
+            evaluated against the actual chosen direction
+            (`src.engines.historical_engine.similarity.
+            summarize_matches_for_direction`), persisted on the journaled
+            `Trade` and shown on the Telegram signal message. None for
+            engines that don't compute one (e.g. Shakky, whose own spec
+            forbids Historical Pattern Matching).
     """
 
     symbol_id: uuid.UUID
@@ -60,6 +100,9 @@ class SignalWorkflowInput:
     strategy_name: str
     strategy_version: str
     telegram_chat_id: str
+    department_votes: dict[str, dict[str, float | str]] | None = None
+    market_regime: str | None = None
+    similarity_summary: SimilarityDisplayStats | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +182,7 @@ class SignalWorkflow:
         magic_number = compute_magic_number(
             workflow_input.strategy_name, workflow_input.strategy_version
         )
+        scenario_plan = build_scenario_plan(decision, market_regime=workflow_input.market_regime)
 
         trade = await self._trades.add(
             Trade(
@@ -148,9 +192,27 @@ class SignalWorkflow:
                 volume=workflow_input.position_size.position_size_units,
                 entry_price=workflow_input.entry_price,
                 stop_loss=workflow_input.stop_loss,
+                initial_stop_loss=workflow_input.stop_loss,
                 take_profit=workflow_input.take_profit,
                 magic_number=magic_number,
                 strategy_version=workflow_input.strategy_version,
+                department_votes=workflow_input.department_votes,
+                quality_score=decision.trade_quality.score,
+                risk_score=decision.trade_quality.risk_score,
+                market_regime=workflow_input.market_regime,
+                confidence_pct=decision.confidence_pct,
+                reasons=decision.reasons,
+                scenario_plan={
+                    "primary_scenario": scenario_plan.primary_scenario,
+                    "alternative_scenario": scenario_plan.alternative_scenario,
+                    "invalidation": scenario_plan.invalidation,
+                    "expected_volatility": scenario_plan.expected_volatility,
+                },
+                similarity_summary=(
+                    dataclasses.asdict(workflow_input.similarity_summary)
+                    if workflow_input.similarity_summary is not None
+                    else None
+                ),
             )
         )
 
@@ -162,7 +224,7 @@ class SignalWorkflow:
                 stop_loss=trade.stop_loss,
                 take_profit=trade.take_profit,
                 magic_number=magic_number,
-                comment=f"{workflow_input.strategy_name}:{trade.id}",
+                comment=_order_comment(workflow_input.strategy_name, trade.id),
             )
         )
 
@@ -182,23 +244,21 @@ class SignalWorkflow:
         trade.opened_at = datetime.now(UTC)
         await self._trades.add(trade)
 
+        votes = workflow_input.department_votes or {}
+        message_direction: Literal["BUY", "SELL"] = "BUY" if decision.state == "BUY" else "SELL"
         signal_message = format_signal_message(
             SignalMessageData(
                 trade_id=str(trade.id),
-                timestamp=trade.opened_at,
                 market=workflow_input.market_symbol_name,
-                direction=decision.state,
+                direction=message_direction,
+                strategy_name=workflow_input.strategy_name,
                 entry_price=workflow_input.entry_price,
                 stop_loss=workflow_input.stop_loss,
-                targets=[workflow_input.take_profit] if workflow_input.take_profit else [],
+                take_profit=workflow_input.take_profit,
                 confidence_pct=decision.confidence_pct,
-                quality_grade=grade_from_confidence(decision.confidence_pct / 100),
-                reason_summary=explain_decision(decision).why_this_direction,
-                alternative_scenario=build_scenario_plan(decision).alternative_scenario,
-                risk_summary=(
-                    f"Position size {workflow_input.position_size.position_size_units:.4f} "
-                    f"units, risking {workflow_input.position_size.effective_risk_pct:.2f}%."
-                ),
+                quality_score=decision.trade_quality.score,
+                reason_tags=build_reason_tags_ru_for_direction(votes, message_direction),
+                similarity_summary=workflow_input.similarity_summary,
             )
         )
         telegram_sent = await self._telegram.send_message(

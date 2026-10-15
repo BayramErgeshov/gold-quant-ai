@@ -6,6 +6,7 @@ import pytest
 
 from src.engines.risk_engine.position_sizing import (
     compute_drawdown_scaling_factor,
+    compute_fixed_lot_position_size,
     compute_position_size,
 )
 
@@ -103,3 +104,58 @@ def test_position_size_respects_max_position_value_cap() -> None:
     )
 
     assert result.position_size_units == pytest.approx(10.0)
+
+
+def test_fixed_lot_position_size_raises_for_non_positive_size() -> None:
+    with pytest.raises(ValueError, match="fixed_lot_size"):
+        compute_fixed_lot_position_size(
+            fixed_lot_size=0.0,
+            account_equity=10_000,
+            entry_price=2000.0,
+            stop_loss_price=1990.0,
+        )
+
+
+def test_fixed_lot_position_size_always_returns_the_configured_size() -> None:
+    high_confidence_setup = compute_fixed_lot_position_size(
+        fixed_lot_size=5.0, account_equity=10_000, entry_price=2000.0, stop_loss_price=1990.0
+    )
+    different_stop_distance = compute_fixed_lot_position_size(
+        fixed_lot_size=5.0, account_equity=10_000, entry_price=2000.0, stop_loss_price=1950.0
+    )
+
+    # Neither the stop distance nor anything about the setup changes the
+    # returned size -- it is always exactly the user's configured value.
+    assert high_confidence_setup.position_size_units == pytest.approx(5.0)
+    assert different_stop_distance.position_size_units == pytest.approx(5.0)
+
+
+def test_fixed_lot_position_size_scales_down_after_drawdown() -> None:
+    result = compute_fixed_lot_position_size(
+        fixed_lot_size=5.0,
+        account_equity=10_000,
+        entry_price=2000.0,
+        stop_loss_price=1990.0,
+        current_drawdown_pct=10.0,
+    )
+
+    assert result.position_size_units < 5.0
+
+
+def test_fixed_lot_position_size_reports_informational_risk_pct() -> None:
+    result = compute_fixed_lot_position_size(
+        fixed_lot_size=5.0, account_equity=10_000, entry_price=2000.0, stop_loss_price=1990.0
+    )
+
+    # risk_amount = 5 units * 10 stop distance = 50; 50 / 10_000 = 0.5%.
+    assert result.risk_amount == pytest.approx(50.0)
+    assert result.effective_risk_pct == pytest.approx(0.5)
+
+
+def test_fixed_lot_position_size_zero_risk_pct_for_non_positive_equity() -> None:
+    result = compute_fixed_lot_position_size(
+        fixed_lot_size=5.0, account_equity=0.0, entry_price=2000.0, stop_loss_price=1990.0
+    )
+
+    assert result.position_size_units == pytest.approx(5.0)
+    assert result.effective_risk_pct == 0.0
